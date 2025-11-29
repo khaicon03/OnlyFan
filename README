@@ -1,0 +1,8 @@
+lấy khoảng cách trung điểm xe với 2 luống là 10cm. Nếu chỉ có luống trái/phải thì vẫn giữ bám luống 10cm
+*** Ko detect được luống ngưng không di chuyển nữa
+--------------------------------------------------------------------------------  
+ảnh trong -- OnlyFan/image
+Hinh_1.png --> thiết lập thông số vùng 2 bên của camera
+               nhận diện là luống nếu có vật thể có độ dốc từ 70 độ trở lên và độ cao vật thể từ 120px trở lên
+
+Hinh_2.jpg --> mô tả khả năng quét luống của camera

@@ -1,0 +1,25 @@
+<launch>
+  <node pkg="row_follow_pkg"
+        type="row_follow_dual_roi.py"
+        name="row_follow_dual_roi"
+        output="screen">
+
+    <param name="image_topic" value="/camera/image_raw" />
+
+    <param name="forward_speed" value="0.25"/>
+
+    <!-- target cho khoảng cách 10cm -->
+    <param name="left_target_ratio"  value="0.30"/>
+    <param name="right_target_ratio" value="0.70"/>
+    <param name="center_ratio"       value="0.50"/>
+
+    <!-- vùng trái/phải để lọc line giả -->
+    <param name="left_min_x_ratio"  value="0.05"/>
+    <param name="left_max_x_ratio"  value="0.45"/>
+    <param name="right_min_x_ratio" value="0.55"/>
+    <param name="right_max_x_ratio" value="0.95"/>
+
+    <param name="k_ang" value="2.0"/>
+    <param name="max_ang" value="1.0"/>
+  </node>
+</launch>
