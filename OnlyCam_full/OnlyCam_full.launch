@@ -1,0 +1,23 @@
+<launch>
+  <!-- mux: chọn 1 trong 2 nguồn -->
+  <node pkg="topic_tools" type="mux" name="cmd_vel_mux" output="screen"
+        args="/cmd_vel /cmd_vel_row /cmd_vel_nav" />
+
+  <!-- node quản lý mode -->
+  <node pkg="row_follow_pkg"
+        type="mode_manager.py"
+        name="mode_manager"
+        output="screen">
+    <param name="row_topic" value="/cmd_vel_row" />
+    <param name="nav_topic" value="/cmd_vel_nav" />
+    <param name="mux_select_service" value="/cmd_vel_mux/select" />
+
+    <!-- dùng odom để auto chuyển mode khi đi đủ row_length -->
+    <param name="use_distance_trigger" value="true" />
+    <param name="row_length" value="10.0" />
+
+    <!-- nếu sau này bạn muốn dùng tín hiệu /end_of_row -->
+    <param name="use_end_of_row_topic" value="false" />
+    <param name="end_of_row_topic" value="/end_of_row" />
+  </node>
+</launch>

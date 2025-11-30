@@ -19,6 +19,9 @@ class DualRowFollowerROI:
         image_topic = rospy.get_param("~image_topic", "/camera/image_raw")
         rospy.Subscriber(image_topic, Image, self.image_callback)
 
+        # bật/tắt imshow debug
+        self.show_debug = rospy.get_param("~show_debug", True)
+
         # tốc độ tiến
         self.forward_speed = rospy.get_param("~forward_speed", 0.25)
 
@@ -106,6 +109,31 @@ class DualRowFollowerROI:
         roi = frame[int(h * 0.5):h, :]
 
         left_xs, right_xs = self.detect_rows(roi)
+        
+        # ====== DEBUG HIỂN THỊ ROI ======
+        if self.show_debug:
+            roi_vis = roi.copy()
+
+            # vẽ vùng trái/phải để bạn thấy ROI ngang
+            roi_h, roi_w, _ = roi_vis.shape
+            left_min = int(roi_w * self.left_min_x_ratio)
+            left_max = int(roi_w * self.left_max_x_ratio)
+            right_min = int(roi_w * self.right_min_x_ratio)
+            right_max = int(roi_w * self.right_max_x_ratio)
+
+            # vẽ 2 vùng trái/phải
+            cv2.rectangle(roi_vis, (left_min, 0), (left_max, roi_h-1), (255, 0, 0), 2)
+            cv2.rectangle(roi_vis, (right_min, 0), (right_max, roi_h-1), (0, 255, 0), 2)
+
+            # vẽ các điểm line bắt được (nếu có)
+            for x in left_xs:
+                cv2.line(roi_vis, (x, 0), (x, roi_h-1), (255, 255, 0), 1)
+            for x in right_xs:
+                cv2.line(roi_vis, (x, 0), (x, roi_h-1), (0, 255, 255), 1)
+
+            cv2.imshow("ROI debug", roi_vis)
+            cv2.waitKey(1)
+        # ====== HẾT PHẦN DEBUG ======
 
         cmd = Twist()
         cmd.linear.x = self.forward_speed

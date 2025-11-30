@@ -1,10 +1,11 @@
 <launch>
   <node pkg="row_follow_pkg"
-        type="row_follow_dual_roi.py"
-        name="row_follow_dual_roi"
+        type="OnlyCam_Filter.py"
+        name="OnlyCam_Filter"
         output="screen">
 
     <param name="image_topic" value="/camera/image_raw" />
+    <param name="show_debug" value="true" />        
 
     <param name="forward_speed" value="0.25"/>
 
