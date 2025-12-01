@@ -6,3 +6,17 @@ Hinh_1.png --> thiết lập thông số vùng 2 bên của camera
                nhận diện là luống nếu có vật thể có độ dốc từ 70 độ trở lên và độ cao vật thể từ 120px trở lên
 
 Hinh_2.jpg --> mô tả khả năng quét luống của camera
+--------------------------------------------------------------------------------
+-------------------------- DEBUG - bật khung hiển thị biên --------------------------
+hiển thị vùng nhận diên biên cho luống cây và vẽ vật thể nhận diện là luống                                                              
+                                    ↓
+                <param name="show_debug" value="true" />
+
+không hiển thị vùng nhận diên biên cho luống cây và vẽ vật thể nhận diện là luống                                                              
+                                    ↓
+                <param name="show_debug" value="false" />
+
+--------------------------------------------------------------------------------
+--------------------------- QUAN TRỌNG -----------------------------------------
+****** chạy    "onlycam_full.launch"   nếu cần dùng move_base ******
+****** chạy     "onlycam.launch"       nếu chỉ dùng mỗi camera *****

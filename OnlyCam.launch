@@ -1,7 +1,7 @@
 <launch>
   <node pkg="row_follow_pkg"
         type="OnlyCam_Filter.py"
-        name="OnlyCam_Filter"
+        name="row_follow_dual_roi"
         output="screen">
 
     <param name="image_topic" value="/camera/image_raw" />

@@ -1,0 +1,88 @@
+<launch>
+
+  <!-- 1. Camera row-follow node -->
+  <node pkg="row_follow_pkg"
+        type="OnlyCam_Filter.py"
+        name="row_follow_dual_roi"
+        output="screen">
+
+    <param name="image_topic" value="/camera/image_raw" />
+    <param name="show_debug"  value="false" />
+
+    <param name="forward_speed" value="0.25" />
+    <!-- target cho khoảng cách 10cm -->
+    <param name="left_target_ratio"  value="0.30"/>
+    <param name="right_target_ratio" value="0.70"/>
+    <param name="center_ratio"       value="0.50"/>
+
+    <!-- vùng trái/phải để lọc line giả -->
+    <param name="left_min_x_ratio"  value="0.05"/>
+    <param name="left_max_x_ratio"  value="0.45"/>
+    <param name="right_min_x_ratio" value="0.55"/>
+    <param name="right_max_x_ratio" value="0.95"/>
+
+    <param name="k_ang" value="2.0"/>
+    <param name="max_ang" value="1.0"/>
+  </node>
+
+  <!-- 2. EKF localization -->
+  <node pkg="robot_localization"
+        type="ekf_localization_node"
+        name="ekf_localization"
+        output="screen">
+    <param name="frequency" value="30" />
+    <rosparam file="$(find field_robot_nav)/config/ekf_localization.yaml" command="load" />
+  </node>
+
+  <!-- 3. SLAM hoặc AMCL (ví dụ slam_gmapping) -->
+  <node pkg="gmapping"
+        type="slam_gmapping"
+        name="slam_gmapping"
+        output="screen">
+    <param name="base_frame" value="base_link" />
+    <param name="odom_frame" value="odom" />
+  </node>
+
+  <!-- 4. move_base (dùng DWA) -->
+  <node pkg="move_base"
+        type="move_base"
+        name="move_base"
+        output="screen">
+    <!-- remap cmd_vel của move_base sang /cmd_vel_nav -->
+    <remap from="/cmd_vel" to="/cmd_vel_nav" />
+
+    <param name="base_global_planner" value="navfn/NavfnROS" />
+    <param name="base_local_planner"  value="dwa_local_planner/DWAPlannerROS" />
+
+    <rosparam file="$(find field_robot_nav)/config/costmap_common_params.yaml" command="load" />
+    <rosparam file="$(find field_robot_nav)/config/global_costmap_params.yaml" command="load" />
+    <rosparam file="$(find field_robot_nav)/config/local_costmap_params.yaml" command="load" />
+    <rosparam file="$(find field_robot_nav)/config/dwa_local_planner_params.yaml" command="load" />
+  </node>
+
+  <!-- 5. MUX: ghép /cmd_vel_row + /cmd_vel_nav -> /cmd_vel -->
+  <node pkg="topic_tools"
+        type="mux"
+        name="cmd_vel_mux"
+        output="screen"
+        args="/cmd_vel /cmd_vel_row /cmd_vel_nav" />
+
+  <!-- 6. Mode manager: tự động chuyển ROW/NAV -->
+  <node pkg="row_follow_pkg"
+        type="mode_manager.py"
+        name="mode_manager"
+        output="screen">
+    <param name="row_topic" value="/cmd_vel_row" />
+    <param name="nav_topic" value="/cmd_vel_nav" />
+    <param name="mux_select_service" value="/cmd_vel_mux/select" />
+
+    <!-- tự chuyển sang NAV khi đi hết 10m trong luống -->
+    <param name="use_distance_trigger" value="true" />
+    <param name="row_length" value="10.0" />
+
+    <!-- nếu sau này bạn muốn dùng /end_of_row thì bật cái này -->
+    <param name="use_end_of_row_topic" value="false" />
+    <param name="end_of_row_topic" value="/end_of_row" />
+  </node>
+
+</launch>
