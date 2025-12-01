@@ -18,6 +18,8 @@ class ModeManager(object):
         self.nav_topic = rospy.get_param("~nav_topic", "/cmd_vel_nav")
         self.mux_select_srv_name = rospy.get_param("~mux_select_service",
                                                    "/cmd_vel_mux/select")
+        # chọn chế độ ban đầu cho mode
+        self.start_mode = rospy.get_param("~start_mode", "ROW")
 
         # dùng odom để trigger hết luống?
         self.use_distance_trigger = rospy.get_param("~use_distance_trigger", True)
@@ -51,8 +53,15 @@ class ModeManager(object):
         rospy.loginfo(" row_topic = %s", self.row_topic)
         rospy.loginfo(" nav_topic = %s", self.nav_topic)
 
-        # mặc định vào luống đầu tiên → mode ROW
-        self.switch_mode(self.MODE_ROW)
+        # chọn mode khởi động theo param
+        start = self.start_mode.upper()
+        if start == "ROW":
+            self.switch_mode(self.MODE_ROW)
+        elif start == "NAV":
+            self.switch_mode(self.MODE_NAV)
+        else:
+            rospy.logwarn("start_mode = %s (không ROW/NAV) -> không tự set mode ban đầu", self.start_mode)
+
 
     # ==========================================================
     # Callbacks

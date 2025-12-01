@@ -77,9 +77,14 @@
     <param name="mux_select_service" value="/cmd_vel_mux/select" />
 
     <!-- tự chuyển sang NAV khi đi hết 10m trong luống -->
+    <param name="start_mode" value="NAV" />
     <param name="use_distance_trigger" value="true" />
     <param name="row_length" value="10.0" />
-
+        
+    <!-- tự chuyển sang NAV khi đi hết 10m trong luống -->
+    <!--<param name="start_mode" value="NAV" />
+        <param name="use_distance_trigger" value="false" />-->
+    
     <!-- nếu sau này bạn muốn dùng /end_of_row thì bật cái này -->
     <param name="use_end_of_row_topic" value="false" />
     <param name="end_of_row_topic" value="/end_of_row" />
