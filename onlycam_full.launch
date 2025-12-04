@@ -12,17 +12,6 @@
     <param name="forward_speed" value="0.25" />
 
     <!-- target cho khoảng cách 10cm -->
-<<<<<<< HEAD
-=======
-    <param name="use_yolo" value="true"/>
-    <param name="yolo_model_path" value="/home/jetson/models/yolov8n-agri.pt"/>
-    <param name="yolo_conf" value="0.5"/>
-    <param name="obstacle_class_ids" value="[0, 1]"/>  <!-- tuỳ model của bạn -->
-    <param name="obstacle_x_min_ratio" value="0.3"/>
-    <param name="obstacle_x_max_ratio" value="0.6"/>
-
-    <!-- target cho khoảng cách 10cm -->
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
     <param name="left_target_ratio"  value="0.30"/>
     <param name="right_target_ratio" value="0.70"/>
     <param name="center_ratio"       value="0.50"/>
@@ -35,7 +24,6 @@
 
     <param name="k_ang" value="2.0"/>
     <param name="max_ang" value="1.0"/>
-<<<<<<< HEAD
 
     <!-- setup sử dụng yolov8-->
     <param name="use_yolo" value="true" />
@@ -53,11 +41,9 @@
     <!-- color check -->
     <param name="use_color_check" value="true" />
     <param name="color_lower" type="yaml" value="[35, 50, 50]" />    <!-- thay bằng lower bạn dùng -->
-    <param name="color_upper" type="yaml" value="[85, 255, 255]" />  <!-- thay bằng upper bạn dùng -->
+    <param name="color_upper" type="yaml" value="[85,255,255]" />  <!-- thay bằng upper bạn dùng -->
     <param name="color_min_ratio" value="0.2" />
 
-=======
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
   </node>
 
   <!-- 5. MUX: ghép /cmd_vel_row + /cmd_vel_nav -> /cmd_vel -->
