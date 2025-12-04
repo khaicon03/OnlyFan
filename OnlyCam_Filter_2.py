@@ -1,10 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-<<<<<<< HEAD
 
-=======
-# update version
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
 import rospy
 import cv2
 import numpy as np
@@ -12,11 +8,7 @@ from cv_bridge import CvBridge
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import Twist
 
-<<<<<<< HEAD
 # YOLOv8
-=======
-# YOLOv8 (cần cài ultralytics trong môi trường ROS)
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
 try:
     from ultralytics import YOLO
 except ImportError:
@@ -25,38 +17,21 @@ except ImportError:
 
 class DualRowFollowerROI:
     def __init__(self):
-<<<<<<< HEAD
         rospy.loginfo("Dual Row Follower (ROI-based + YOLO) started.")
 
         self.bridge = CvBridge()
 
         # xuất lệnh ra /cmd_vel_row
-=======
-        rospy.loginfo("Dual Row Follower (ROI-based) started.")
-
-        self.bridge = CvBridge()
-
-        # QUAN TRỌNG: xuất lệnh ra /cmd_vel_row
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
         self.cmd_pub = rospy.Publisher("/cmd_vel_row", Twist, queue_size=10)
 
         # ========= PARAMS từ launch =========
         self.image_topic = rospy.get_param("~image_topic", "/camera/image_raw")
-<<<<<<< HEAD
-=======
-
-        # sử dụng để hiện vị trí biên camera
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
         self.show_debug  = rospy.get_param("~show_debug", True)
 
         # tốc độ tiến
         self.forward_speed = rospy.get_param("~forward_speed", 0.25)
 
-<<<<<<< HEAD
         # target theo 10cm
-=======
-        # target theo 10cm (theo phương NGANG)
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
         self.left_target_ratio  = rospy.get_param("~left_target_ratio", 0.30)
         self.right_target_ratio = rospy.get_param("~right_target_ratio", 0.70)
         self.center_ratio       = rospy.get_param("~center_ratio", 0.50)
@@ -68,7 +43,6 @@ class DualRowFollowerROI:
         self.right_max_x_ratio = rospy.get_param("~right_max_x_ratio", 0.95)
 
         # gain điều khiển
-<<<<<<< HEAD
         self.k_ang   = rospy.get_param("~k_ang", 2.0)
         self.max_ang = rospy.get_param("~max_ang", 1.0)
 
@@ -134,53 +108,6 @@ class DualRowFollowerROI:
         self.inspect_pause_frames = rospy.get_param("~inspect_pause_frames", 10)
         self.inspect_counter = 0  # >0 nghĩa là vừa check xong cây, chưa dừng lại nữa
 
-=======
-        self.k_ang = rospy.get_param("~k_ang", 2.0)
-        self.max_ang = rospy.get_param("~max_ang", 1.0)
-
-        # Canny + Hough params
-        self.canny1 = rospy.get_param("~canny1", 50)
-        self.canny2 = rospy.get_param("~canny2", 150)
-        self.hough_threshold = rospy.get_param("~hough_threshold", 40)
-
-        # NGƯỠNG GÓC (ý từ test.py):
-        # chỉ giữ các line có góc so với trục NẰM (x) >= min_angle_deg
-        # (0° = nằm ngang, 90° = dựng đứng)
-        # ép ngưỡng tối thiểu 35°: không cho phép giảm xuống thấp hơn
-        self.min_angle_deg = max(35.0, rospy.get_param("~min_angle_deg", 35.0))
-
-        # ========= PARAMS OBSTACLE (YOLO) =========
-        # BẬT/TẮT YOLO obstacle
-        self.use_yolo = rospy.get_param("~use_yolo", False)
-        self.yolo_model_path = rospy.get_param("~yolo_model_path", "")
-        self.yolo_conf = rospy.get_param("~yolo_conf", 0.5)
-
-        # danh sách class id được coi là "vật cản"
-        # vd: [0] nếu model custom có class 0 = person/obstacle
-        self.obstacle_class_ids = rospy.get_param("~obstacle_class_ids", [])
-
-        # vùng PATH để xét obstacle:
-        # 30% đến 60% chiều NGANG, FULL chiều DỌC như bạn yêu cầu
-        self.obstacle_x_min_ratio = rospy.get_param("~obstacle_x_min_ratio", 0.30)
-        self.obstacle_x_max_ratio = rospy.get_param("~obstacle_x_max_ratio", 0.60)
-
-        self.yolo = None
-        if self.use_yolo:
-            if YOLO is None:
-                rospy.logerr("ultralytics (YOLOv8) chưa được cài, tắt use_yolo.")
-                self.use_yolo = False
-            elif not self.yolo_model_path:
-                rospy.logerr("Thiếu ~yolo_model_path, tắt use_yolo.")
-                self.use_yolo = False
-            else:
-                try:
-                    rospy.loginfo("Loading YOLO model from: %s", self.yolo_model_path)
-                    self.yolo = YOLO(self.yolo_model_path)
-                except Exception as e:
-                    rospy.logerr("Lỗi load YOLO model: %s", e)
-                    self.use_yolo = False
-
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
         # subscriber camera
         rospy.Subscriber(self.image_topic, Image, self.image_callback)
 
@@ -206,25 +133,15 @@ class DualRowFollowerROI:
 
         h, w = roi.shape[:2]
 
-<<<<<<< HEAD
-=======
-        # chuyển ratio sang px
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
         left_min  = int(w * self.left_min_x_ratio)
         left_max  = int(w * self.left_max_x_ratio)
         right_min = int(w * self.right_min_x_ratio)
         right_max = int(w * self.right_max_x_ratio)
-<<<<<<< HEAD
 
-=======
-  
-        # duyệt tất cả line
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
         if lines is not None:
             for l in lines:
                 x1, y1, x2, y2 = l[0]
 
-<<<<<<< HEAD
                 dx = x2 - x1
                 dy = y2 - y1
 
@@ -238,27 +155,6 @@ class DualRowFollowerROI:
 
                 x = x1 if y1 > y2 else x2
 
-=======
-                # ====== LỌC GÓC (ý từ test.py) ======
-                dx = x2 - x1
-                dy = y2 - y1
-
-                # góc so với TRỤC NẰM (x), đơn vị độ
-                angle = np.degrees(np.arctan2(dy, dx))
-                angle = abs(angle)            # 0..180
-                if angle > 90:                # gộp 0 & 180 về cùng 0
-                    angle = 180 - angle       # giờ angle trong [0..90]
-
-                # chỉ giữ line đủ dốc (>= min_angle_deg)
-                if angle < self.min_angle_deg:
-                    continue
-                # =====================================
-
-                # lấy điểm gần đáy ảnh hơn (để biết nó cắt ở đâu tại đáy ROI)
-                x = x1 if y1 > y2 else x2
-
-                # kiểm tra nó thuộc trái hay phải (lọc thêm bằng vùng)
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
                 if left_min <= x <= left_max:
                     left_xs.append(x)
                 elif right_min <= x <= right_max:
@@ -267,7 +163,6 @@ class DualRowFollowerROI:
         return left_xs, right_xs, edges, lines
 
     # =====================================================================
-<<<<<<< HEAD
     # CHECK MÀU TRONG BBOX CÂY (HSV)
     # =====================================================================
     def check_plant_color(self, frame, bbox):
@@ -307,24 +202,16 @@ class DualRowFollowerROI:
         return is_match, ratio
 
     # =====================================================================
-=======
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
     # CALLBACK: xử lý từng frame
     # =====================================================================
     def image_callback(self, msg):
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, "bgr8")
-<<<<<<< HEAD
         except:
-=======
-        except Exception as e:
-            rospy.logwarn("CvBridge error: %s", e)
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
             return
 
         h, w, _ = frame.shape
 
-<<<<<<< HEAD
         # giảm counter nếu đang ở pha "đi tiếp sau khi kiểm tra cây"
         if self.inspect_counter > 0:
             self.inspect_counter -= 1
@@ -386,50 +273,6 @@ class DualRowFollowerROI:
                             )
 
         # Nếu có vật cản trong khung 30–60% -> dừng và (nếu debug) vẽ khung rồi RETURN
-=======
-        # -----------------------------------------------------------
-        # 1) CHECK OBSTACLE TRÊN ĐƯỜNG BẰNG YOLO (30%–60% NGANG, FULL DỌC)
-        # -----------------------------------------------------------
-        obstacle_on_path = False
-        obstacle_bbox = None
-
-        if self.use_yolo and self.yolo is not None:
-            # vùng PATH theo tỉ lệ bạn yêu cầu
-            path_x_min = int(self.obstacle_x_min_ratio * w)
-            path_x_max = int(self.obstacle_x_max_ratio * w)
-            path_y_min = 0
-            path_y_max = h
-
-            try:
-                # chạy YOLO trực tiếp trên frame
-                results = self.yolo(frame, verbose=False, conf=self.yolo_conf)
-
-                for r in results:
-                    if not hasattr(r, "boxes"):
-                        continue
-                    for b in r.boxes:
-                        cls_id = int(b.cls[0].item())
-                        # nếu có cấu hình obstacle_class_ids thì chỉ lấy các class đó
-                        if self.obstacle_class_ids and cls_id not in self.obstacle_class_ids:
-                            continue
-
-                        x1, y1, x2, y2 = map(int, b.xyxy[0].tolist())
-                        cx = (x1 + x2) // 2
-                        cy = (y1 + y2) // 2
-
-                        # tâm bbox nằm trong hành lang 30–60% ngang, full dọc
-                        if path_x_min <= cx <= path_x_max and path_y_min <= cy <= path_y_max:
-                            obstacle_on_path = True
-                            obstacle_bbox = (x1, y1, x2, y2)
-                            break
-                    if obstacle_on_path:
-                        break
-
-            except Exception as e:
-                rospy.logwarn("YOLO inference failed: %s", e)
-
-        # nếu có obstacle trên đường -> DỪNG VÀ RETURN
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
         if obstacle_on_path:
             cmd = Twist()
             cmd.linear.x = 0.0
@@ -437,7 +280,6 @@ class DualRowFollowerROI:
             self.cmd_pub.publish(cmd)
 
             if self.show_debug:
-<<<<<<< HEAD
                 frame_obs = frame.copy()
                 path_x_min = int(self.obstacle_x_min_ratio * w)
                 path_x_max = int(self.obstacle_x_max_ratio * w)
@@ -521,79 +363,24 @@ class DualRowFollowerROI:
         # =====================================================
         roi = frame[int(h * 0.5):h, :]
 
-=======
-                debug_frame = frame.copy()
-                # vẽ vùng PATH
-                path_x_min = int(self.obstacle_x_min_ratio * w)
-                path_x_max = int(self.obstacle_x_max_ratio * w)
-                path_y_min = 0
-                path_y_max = h
-                cv2.rectangle(debug_frame,
-                              (path_x_min, path_y_min),
-                              (path_x_max, path_y_max),
-                              (0, 255, 255), 2)
-                # vẽ bbox obstacle
-                if obstacle_bbox is not None:
-                    x1, y1, x2, y2 = obstacle_bbox
-                    cv2.rectangle(debug_frame,
-                                  (x1, y1), (x2, y2),
-                                  (0, 0, 255), 2)
-                    cv2.putText(debug_frame, "OBSTACLE ON PATH",
-                                (x1, max(0, y1 - 10)),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.6,
-                                (0, 0, 255), 2)
-                cv2.imshow("ObstacleView", debug_frame)
-                cv2.waitKey(1)
-
-            return  # không bám luống nữa ở frame này
-
-        # -----------------------------------------------------------
-        # 2) NẾU KHÔNG CÓ OBSTACLE -> TIẾP TỤC BÁM LUỐNG NHƯ CŨ
-        # -----------------------------------------------------------
-
-        # ROI: nửa dưới màn hình
-        roi = frame[int(h * 0.5):h, :]
-
-        # detect
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
         left_xs, right_xs, edges, lines = self.detect_rows(roi)
 
         # ======== DEBUG HIỂN THỊ ========
         if self.show_debug:
-<<<<<<< HEAD
             roi_vis = roi.copy()
             roi_h, roi_w, _ = roi_vis.shape
 
-=======
-            # ----- 1) VẼ TRÊN ROI -----
-            roi_vis = roi.copy()
-            roi_h, roi_w, _ = roi_vis.shape
-
-            # vùng trái/phải trong ROI
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
             left_min  = int(roi_w * self.left_min_x_ratio)
             left_max  = int(roi_w * self.left_max_x_ratio)
             right_min = int(roi_w * self.right_min_x_ratio)
             right_max = int(roi_w * self.right_max_x_ratio)
 
-<<<<<<< HEAD
             cv2.rectangle(roi_vis, (left_min, 0), (left_max, roi_h - 1), (255, 0, 0), 2)
             cv2.rectangle(roi_vis, (right_min, 0), (right_max, roi_h - 1), (0, 255, 0), 2)
 
             cx_roi = int(self.center_ratio * roi_w)
             cv2.line(roi_vis, (cx_roi, 0), (cx_roi, roi_h - 1), (255, 0, 255), 1)
 
-=======
-            # vẽ vùng trái/phải
-            cv2.rectangle(roi_vis, (left_min, 0), (left_max, roi_h - 1), (255, 0, 0), 2)
-            cv2.rectangle(roi_vis, (right_min, 0), (right_max, roi_h - 1), (0, 255, 0), 2)
-
-            # vẽ đường giữa ROI (theo center_ratio)
-            cx_roi = int(self.center_ratio * roi_w)
-            cv2.line(roi_vis, (cx_roi, 0), (cx_roi, roi_h - 1), (255, 0, 255), 1)
-
-            # vẽ các line Hough đã LỌC GÓC (>= min_angle_deg)
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
             if lines is not None:
                 for l in lines:
                     x1_l, y1_l, x2_l, y2_l = l[0]
@@ -605,25 +392,16 @@ class DualRowFollowerROI:
                     if angle > 90.0:
                         angle = 180.0 - angle
 
-<<<<<<< HEAD
-=======
-                    # bỏ line gần nằm ngang
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
                     if angle < self.min_angle_deg:
                         continue
 
                     cv2.line(roi_vis, (x1_l, y1_l), (x2_l, y2_l), (0, 0, 255), 2)
 
-<<<<<<< HEAD
-=======
-            # vẽ các x đã chọn làm luống (sau khi lọc góc + vùng)
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
             for x in left_xs:
                 cv2.line(roi_vis, (x, 0), (x, roi_h - 1), (255, 255, 0), 1)
             for x in right_xs:
                 cv2.line(roi_vis, (x, 0), (x, roi_h - 1), (0, 255, 255), 1)
 
-<<<<<<< HEAD
             frame_vis = frame.copy()
 
             # vẽ khung 30–60% cho dễ hình dung
@@ -643,62 +421,31 @@ class DualRowFollowerROI:
                 cv2.putText(frame_vis, txt, (x1b, max(0, y1b - 5)),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
-=======
-            # ----- 2) VẼ LÊN FULL FRAME -----
-            frame_vis = frame.copy()
-
-            # tọa độ ROI trên full frame
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
             x1 = 0
             y1 = int(h * 0.5)
             x2 = w
             y2 = h
 
-<<<<<<< HEAD
             cv2.rectangle(frame_vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
             cx_full = int(self.center_ratio * w)
             cv2.line(frame_vis, (cx_full, y1), (cx_full, y2), (255, 0, 0), 1)
 
-=======
-            # khung ROI (xanh lá)
-            cv2.rectangle(frame_vis, (x1, y1), (x2, y2), (0, 255, 0), 2)
-
-            # trục giữa camera trên full frame (dùng center_ratio)
-            cx_full = int(self.center_ratio * w)
-            cv2.line(frame_vis, (cx_full, y1), (cx_full, y2), (255, 0, 0), 1)
-
-            # vẽ các "biên" đã chọn lên full frame
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
             for x in left_xs:
                 cv2.line(frame_vis, (x, y1), (x, y2), (255, 255, 0), 1)
             for x in right_xs:
                 cv2.line(frame_vis, (x, y1), (x, y2), (0, 255, 255), 1)
 
-<<<<<<< HEAD
             cv2.imshow("Frame with ROI + rows + plants", frame_vis)
-=======
-            cv2.imshow("Frame with ROI + rows", frame_vis)
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
             cv2.imshow("ROI_with_lines", roi_vis)
             cv2.imshow("Edges", edges)
             cv2.waitKey(1)
         # =========== Hết DEBUG ===========
 
-<<<<<<< HEAD
         # ------------------ ĐIỀU KHIỂN BÁM LUỐNG ------------------
         cmd = Twist()
         cmd.linear.x = self.forward_speed
 
-=======
-        # Điều khiển
-        cmd = Twist()
-        cmd.linear.x = self.forward_speed
-
-        # ==============================
-        # TRƯỜNG HỢP 1: CÓ 2 LUỐNG
-        # ==============================
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
         if len(left_xs) > 0 and len(right_xs) > 0:
             x_left  = max(left_xs)
             x_right = min(right_xs)
@@ -706,44 +453,22 @@ class DualRowFollowerROI:
             desired = self.center_ratio * w
             error = (desired - center) / float(w)
 
-<<<<<<< HEAD
-=======
-        # ==============================
-        # TRƯỜNG HỢP 2: CHỈ LUỐNG TRÁI
-        # ==============================
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
         elif len(left_xs) > 0:
             x_left = max(left_xs)
             desired = self.left_target_ratio * w
             error = (desired - x_left) / float(w)
 
-<<<<<<< HEAD
-=======
-        # ==============================
-        # TRƯỜNG HỢP 3: CHỈ LUỐNG PHẢI
-        # ==============================
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
         elif len(right_xs) > 0:
             x_right = min(right_xs)
             desired = self.right_target_ratio * w
             error = (desired - x_right) / float(w)
 
-<<<<<<< HEAD
-=======
-        # ==============================
-        # TRƯỜNG HỢP 4: KHÔNG THẤY LUỐNG
-        # ==============================
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
         else:
             cmd.linear.x = 0.0
             cmd.angular.z = 0.0
             self.cmd_pub.publish(cmd)
             return
 
-<<<<<<< HEAD
-=======
-        # tính góc quay
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
         ang = self.k_ang * error
         ang = max(-self.max_ang, min(self.max_ang, ang))
         cmd.angular.z = ang
@@ -751,10 +476,6 @@ class DualRowFollowerROI:
         self.cmd_pub.publish(cmd)
 
 
-<<<<<<< HEAD
-=======
-# ========================================================================
->>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
 if __name__ == "__main__":
     rospy.init_node("row_follow_dual_roi")
     node = DualRowFollowerROI()
