@@ -1,0 +1,93 @@
+<launch>
+
+  <!-- 1. Camera row-follow node -->
+  <node pkg="row_follow_pkg"
+        type="OnlyCam_Filter.py"
+        name="row_follow_dual_roi"
+        output="screen">
+
+    <param name="image_topic" value="/camera/image_raw" />
+    <param name="show_debug"  value="false" />
+
+    <param name="forward_speed" value="0.25" />
+
+    <!-- target cho khoảng cách 10cm -->
+<<<<<<< HEAD
+=======
+    <param name="use_yolo" value="true"/>
+    <param name="yolo_model_path" value="/home/jetson/models/yolov8n-agri.pt"/>
+    <param name="yolo_conf" value="0.5"/>
+    <param name="obstacle_class_ids" value="[0, 1]"/>  <!-- tuỳ model của bạn -->
+    <param name="obstacle_x_min_ratio" value="0.3"/>
+    <param name="obstacle_x_max_ratio" value="0.6"/>
+
+    <!-- target cho khoảng cách 10cm -->
+>>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
+    <param name="left_target_ratio"  value="0.30"/>
+    <param name="right_target_ratio" value="0.70"/>
+    <param name="center_ratio"       value="0.50"/>
+
+    <!-- vùng trái/phải để lọc line giả -->
+    <param name="left_min_x_ratio"  value="0.05"/>
+    <param name="left_max_x_ratio"  value="0.45"/>
+    <param name="right_min_x_ratio" value="0.55"/>
+    <param name="right_max_x_ratio" value="0.95"/>
+
+    <param name="k_ang" value="2.0"/>
+    <param name="max_ang" value="1.0"/>
+<<<<<<< HEAD
+
+    <!-- setup sử dụng yolov8-->
+    <param name="use_yolo" value="true" />
+    <param name="yolo_model_path" value="/home/nano/models/plant_yolov8n.pt" />
+    <param name="yolo_conf" value="0.5" />
+    <param name="yolo_iou"  value="0.45" />
+
+    <!-- khung dọc 30–60% để check vật cản -->
+    <param name="obstacle_x_min_ratio" value="0.30" />
+    <param name="obstacle_x_max_ratio" value="0.60" />
+
+    <!-- ID class cây trong model YOLO (ví dụ 0 là cây) -->
+    <param name="plant_class_ids" type="yaml" value="[53]" />
+
+    <!-- color check -->
+    <param name="use_color_check" value="true" />
+    <param name="color_lower" type="yaml" value="[35, 50, 50]" />    <!-- thay bằng lower bạn dùng -->
+    <param name="color_upper" type="yaml" value="[85, 255, 255]" />  <!-- thay bằng upper bạn dùng -->
+    <param name="color_min_ratio" value="0.2" />
+
+=======
+>>>>>>> 55b1ef1f7c2f4dd9b10385e16ede8fc0cb447dc2
+  </node>
+
+  <!-- 5. MUX: ghép /cmd_vel_row + /cmd_vel_nav -> /cmd_vel -->
+  <node pkg="topic_tools"
+        type="mux"
+        name="cmd_vel_mux"
+        output="screen"
+        args="/cmd_vel /cmd_vel_row /cmd_vel_nav" />
+
+  <!-- 6. Mode manager: tự động chuyển ROW/NAV -->
+  <node pkg="row_follow_pkg"
+        type="mode_manager.py"
+        name="mode_manager"
+        output="screen">
+    <param name="row_topic" value="/cmd_vel_row" />
+    <param name="nav_topic" value="/cmd_vel_nav" />
+    <param name="mux_select_service" value="/cmd_vel_mux/select" />
+
+    <!-- tự chuyển sang NAV khi đi hết 10m trong luống -->
+    <param name="start_mode" value="NAV" />
+    <param name="use_distance_trigger" value="true" />
+    <param name="row_length" value="10.0" />
+        
+    <!-- tự chuyển sang NAV khi đi hết 10m trong luống -->
+    <!--<param name="start_mode" value="NAV" />
+        <param name="use_distance_trigger" value="false" />-->
+    
+    <!-- nếu sau này bạn muốn dùng /end_of_row thì bật cái này -->
+    <param name="use_end_of_row_topic" value="false" />
+    <param name="end_of_row_topic" value="/end_of_row" />
+  </node>
+
+</launch>
