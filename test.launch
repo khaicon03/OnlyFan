@@ -1,0 +1,21 @@
+<node pkg="field_robot_cam" type="cam.py" name="row_follow_dual_roi" output="screen">
+  <!-- Topic -->
+  <param name="image_topic" value="/camera/image_raw"/>
+  <param name="cmd_topic"   value="/cmd_vel_row"/>
+
+  <!-- Bám luống -->
+  <param name="forward_speed" value="0.25"/>
+  <param name="roi_y_start_ratio" value="0.5"/>
+  <param name="roi_y_end_ratio"   value="1.0"/>
+
+  <!-- YOLO -->
+  <param name="use_yolo" value="true"/>
+  <!-- đường dẫn model như bạn muốn, ví dụ .pt hoặc .engine đã export cho ultralytics -->
+  <param name="yolo_model_path" value="$(find field_robot_cam)/scripts/yolov8n_fp16.engine"/>
+  <param name="yolo_conf" value="0.5"/>
+  <!-- ví dụ quan tâm class 0 -->
+  <param name="yolo_target_classes" value="[0]"/>
+  <param name="stop_on_detection" value="true"/>
+
+  <param name="show_debug" value="true"/>
+</node>
