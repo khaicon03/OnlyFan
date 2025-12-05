@@ -128,6 +128,6 @@ class VisionFollower(object):
 
 # =====================================================================
 if __name__ == "__main__":
-    rospy.init_node("vision_follower_py2")
+    rospy.init_node("vision_follower")
     node = VisionFollower()
     rospy.spin()
