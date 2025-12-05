@@ -31,6 +31,9 @@
     <param name="yolo_conf" value="0.5" />
     <param name="yolo_iou"  value="0.45" />
 
+    <param name="yolo_input_width"  value="640" />
+    <param name="yolo_input_height" value="640" />
+
     <!-- khung dọc 30–60% để check vật cản -->
     <param name="obstacle_x_min_ratio" value="0.30" />
     <param name="obstacle_x_max_ratio" value="0.60" />
