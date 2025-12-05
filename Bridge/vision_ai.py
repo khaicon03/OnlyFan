@@ -1,0 +1,517 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import cv2 as cv
+import numpy as np
+import time
+import os
+import json
+
+import tensorrt as trt
+import pycuda.driver as cuda
+import pycuda.autoinit  # tạo CUDA context
+
+
+# ========== CẤU HÌNH CHUNG ==========
+ENGINE_PATH = "yolov8n_fp16.engine"  # sửa lại path engine của bạn
+INPUT_W = 640
+INPUT_H = 640
+CONF_THRES = 0.25
+IOU_THRES = 0.45
+
+SHOW_DEBUG = True  # bật/tắt imshow debug
+
+# File JSON dùng chung với ROS Python2
+STATE_FILE = "/tmp/vision_state.json"
+
+
+# ========== GHI JSON STATE ==========
+def write_state(state):
+    """Ghi JSON atomically để ROS đọc không bị lỗi."""
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(state, f)
+    os.replace(tmp, STATE_FILE)
+
+
+# ========== CAMERA PIPELINE (Jetson IMX219) ==========
+def gstreamer_pipeline(
+    sensor_id=0,
+    capture_width=1280,
+    capture_height=720,
+    display_width=640,
+    display_height=480,
+    framerate=30,
+    flip_method=0,
+):
+    return (
+        "nvarguscamerasrc sensor-id=%d ! "
+        "video/x-raw(memory:NVMM), width=(int)%d, height=(int)%d, "
+        "format=(string)NV12, framerate=(fraction)%d/1 ! "
+        "nvvidconv flip-method=%d ! "
+        "video/x-raw, width=(int)%d, height=(int)%d, format=(string)BGRx ! "
+        "videoconvert ! "
+        "video/x-raw, format=(string)BGR ! appsink"
+        % (
+            sensor_id,
+            capture_width,
+            capture_height,
+            framerate,
+            flip_method,
+            display_width,
+            display_height,
+        )
+    )
+
+
+# ========== TENSORRT YOLO ==========
+def load_engine(engine_path):
+    logger = trt.Logger(trt.Logger.INFO)
+    runtime = trt.Runtime(logger)
+    print("Đang load engine:", engine_path)
+    with open(engine_path, "rb") as f:
+        engine_data = f.read()
+    engine = runtime.deserialize_cuda_engine(engine_data)
+    if engine is None:
+        raise RuntimeError("Không load được engine TensorRT!")
+    print("Load engine OK, bindings:", engine.num_bindings)
+    return engine
+
+
+def preprocess_trt(img, input_w, input_h):
+    h, w, _ = img.shape
+    img_resized = cv.resize(img, (input_w, input_h))
+    img_rgb = cv.cvtColor(img_resized, cv.COLOR_BGR2RGB)
+    img_norm = img_rgb.astype(np.float32) / 255.0
+    img_chw = np.transpose(img_norm, (2, 0, 1))  # HWC -> CHW
+    img_chw = np.expand_dims(img_chw, axis=0)    # (1,3,H,W)
+    return img_chw, (w, h)
+
+
+def nms(boxes, scores, iou_thres):
+    if len(boxes) == 0:
+        return []
+    boxes = np.array(boxes)
+    scores = np.array(scores)
+
+    x1 = boxes[:, 0]
+    y1 = boxes[:, 1]
+    x2 = boxes[:, 2]
+    y2 = boxes[:, 3]
+    areas = (x2 - x1) * (y2 - y1)
+
+    order = scores.argsort()[::-1]
+    keep = []
+
+    while order.size > 0:
+        i = order[0]
+        keep.append(i)
+
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+
+        w = np.maximum(0.0, xx2 - xx1)
+        h = np.maximum(0.0, yy2 - yy1)
+        inter = w * h
+        iou = inter / (areas[i] + areas[order[1:]] - inter + 1e-6)
+
+        inds = np.where(iou <= iou_thres)[0]
+        order = order[inds + 1]
+
+    return keep
+
+
+def postprocess_trt(outputs, ori_shape):
+    """
+    outputs: numpy (1, N, 84) hoặc (1, 84, N)
+    ori_shape: (w_orig, h_orig)
+
+    Trả về list:
+      (x1, y1, x2, y2, conf, label_type, class_id)
+      label_type ∈ {"plant", "obstacle"}
+    """
+    w_orig, h_orig = ori_shape
+
+    out = outputs[0]  # (84, N) hoặc (N, 84)
+    if out.shape[0] == 84:
+        out = out.transpose(1, 0)  # -> (N,84)
+    elif out.shape[-1] == 84:
+        pass
+    else:
+        print("Output shape lạ:", out.shape)
+        return []
+
+    boxes = out[:, :4]
+    scores_all = out[:, 4:]  # N x num_classes
+
+    PLANT_ID = 53  # class id cây trồng
+    results = []
+
+    for i in range(scores_all.shape[0]):
+        class_id = int(np.argmax(scores_all[i]))
+        score = float(scores_all[i, class_id])
+        if score < CONF_THRES:
+            continue
+
+        if class_id == PLANT_ID:
+            label_type = "plant"
+        else:
+            label_type = "obstacle"
+
+        cx, cy, bw, bh = boxes[i]
+
+        x1 = (cx - bw / 2.0) * (w_orig / float(INPUT_W))
+        y1 = (cy - bh / 2.0) * (h_orig / float(INPUT_H))
+        x2 = (cx + bw / 2.0) * (w_orig / float(INPUT_W))
+        y2 = (cy + bh / 2.0) * (h_orig / float(INPUT_H))
+
+        results.append([x1, y1, x2, y2, score, label_type, class_id])
+
+    if len(results) == 0:
+        return []
+
+    final_results = []
+    # NMS tách riêng plant / obstacle
+    for lbl in ["plant", "obstacle"]:
+        g_boxes = []
+        g_scores = []
+        idx_map = []
+        for idx, (x1, y1, x2, y2, sc, lab, cid) in enumerate(results):
+            if lab == lbl:
+                g_boxes.append([x1, y1, x2, y2])
+                g_scores.append(sc)
+                idx_map.append((idx, cid))
+
+        if len(g_boxes) == 0:
+            continue
+
+        keep = nms(g_boxes, g_scores, IOU_THRES)
+        for k in keep:
+            x1, y1, x2, y2 = g_boxes[k]
+            sc = g_scores[k]
+            idx, cid = idx_map[k]
+            final_results.append((x1, y1, x2, y2, sc, lbl, cid))
+
+    return final_results
+
+
+# ========== IoU tracking cho cây ==========
+def bbox_iou(b1, b2):
+    x1, y1, x2, y2 = b1
+    x1b, y1b, x2b, y2b = b2
+
+    inter_x1 = max(x1, x1b)
+    inter_y1 = max(y1, y1b)
+    inter_x2 = min(x2, x2b)
+    inter_y2 = min(y2, y2b)
+
+    w = max(0.0, inter_x2 - inter_x1)
+    h = max(0.0, inter_y2 - inter_y1)
+    inter = w * h
+
+    area1 = max(0.0, (x2 - x1) * (y2 - y1))
+    area2 = max(0.0, (x2b - x1b) * (y2b - y1b))
+
+    union = area1 + area2 - inter + 1e-6
+    return inter / union
+
+
+# ========== Hough detect luống ==========
+def detect_rows_hough(frame):
+    """
+    - Cắt nửa dưới ảnh (theo chiều dọc) làm ROI.
+    - HoughLinesP trên ROI.
+    - Giữ line có góc > 35°.
+    - Nếu số line trái/phải >= 20% tổng line hợp lệ -> coi là có luống.
+    """
+    h, w = frame.shape[:2]
+    roi_y_start = int(0.5 * h)
+    roi = frame[roi_y_start:h, :]
+    roi_h, roi_w = roi.shape[:2]
+
+    gray = cv.cvtColor(roi, cv.COLOR_BGR2GRAY)
+    blur = cv.GaussianBlur(gray, (5, 5), 0)
+    edges = cv.Canny(blur, 50, 150)
+
+    lines = cv.HoughLinesP(
+        edges,
+        rho=1,
+        theta=np.pi / 180,
+        threshold=40,
+        minLineLength=int(roi_h * 0.4),
+        maxLineGap=30
+    )
+
+    debug_img = cv.cvtColor(edges, cv.COLOR_GRAY2BGR)
+
+    # chia ROI thành trái / phải
+    mid_x = roi_w // 2
+    cv.line(debug_img, (mid_x, 0), (mid_x, roi_h - 1), (255, 0, 255), 1)
+
+    MIN_ANGLE = 35.0
+
+    candidate_lines = []
+    left_lines = []
+    right_lines = []
+
+    if lines is not None:
+        for l in lines:
+            x1, y1, x2, y2 = l[0]
+            dx = x2 - x1
+            dy = y2 - y1
+
+            angle = abs(np.degrees(np.arctan2(dy, dx)))
+            if angle > 90:
+                angle = 180 - angle
+
+            if angle <= MIN_ANGLE:
+                continue
+
+            candidate_lines.append((x1, y1, x2, y2))
+
+            cv.line(debug_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+
+            x_base = x1 if y1 > y2 else x2
+            if x_base < mid_x:
+                left_lines.append((x1, y1, x2, y2, x_base))
+            else:
+                right_lines.append((x1, y1, x2, y2, x_base))
+
+    total_valid = len(candidate_lines)
+    if total_valid == 0:
+        return False, 0.0, debug_img
+
+    # ≥ 20% tổng line
+    min_count = max(1, int(0.2 * total_valid))
+    has_left = len(left_lines) >= min_count
+    has_right = len(right_lines) >= min_count
+
+    if not has_left and not has_right:
+        return False, 0.0, debug_img
+
+    desired_center = w * 0.5
+
+    if has_left and has_right:
+        x_left = np.mean([ln[4] for ln in left_lines])
+        x_right = np.mean([ln[4] for ln in right_lines])
+        mid = (x_left + x_right) / 2.0
+        steer_error = (desired_center - mid) / float(w)
+    elif has_left:
+        x_left = np.mean([ln[4] for ln in left_lines])
+        target = 0.3 * w
+        steer_error = (target - x_left) / float(w)
+    else:  # chỉ có phải
+        x_right = np.mean([ln[4] for ln in right_lines])
+        target = 0.7 * w
+        steer_error = (target - x_right) / float(w)
+
+    cv.putText(debug_img,
+               "valid=%d L=%d R=%d" % (total_valid, len(left_lines), len(right_lines)),
+               (5, 20), cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
+
+    return True, steer_error, debug_img
+
+
+# ========== Obstacle trên đường (30–60% ngang) ==========
+def detect_obstacle_on_path(detections, frame):
+    h, w = frame.shape[:2]
+    X_MIN = int(0.3 * w)
+    X_MAX = int(0.6 * w)
+    Y_MIN = 0
+    Y_MAX = h
+
+    debug_img = frame.copy()
+    cv.rectangle(debug_img, (X_MIN, Y_MIN), (X_MAX, Y_MAX), (0, 255, 255), 2)
+
+    obstacle_on_path = False
+
+    for (x1, y1, x2, y2, conf, label, cid) in detections:
+        if label != "obstacle":
+            continue
+
+        cx = (x1 + x2) / 2.0
+        cy = (y1 + y2) / 2.0
+
+        if X_MIN <= cx <= X_MAX and Y_MIN <= cy <= Y_MAX:
+            obstacle_on_path = True
+            x1i = int(max(0, x1)); y1i = int(max(0, y1))
+            x2i = int(min(w-1, x2)); y2i = int(min(h-1, y2))
+            cv.rectangle(debug_img, (x1i, y1i), (x2i, y2i), (0, 0, 255), 2)
+            cv.putText(debug_img, "OBS %.2f" % conf,
+                       (x1i, max(0, y1i-5)),
+                       cv.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+    if obstacle_on_path:
+        cv.putText(debug_img, "OBSTACLE ON PATH", (10, h - 10),
+                   cv.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+    return obstacle_on_path, debug_img
+
+
+# ========== HSV detect màu cây ==========
+# Thay các khoảng này bằng lower/upper bạn đã dùng
+LOWER_HEALTHY = np.array([35, 80, 80], dtype=np.uint8)
+UPPER_HEALTHY = np.array([85, 255, 255], dtype=np.uint8)
+LOWER_SICK = np.array([15, 40, 40], dtype=np.uint8)
+UPPER_SICK = np.array([35, 255, 255], dtype=np.uint8)
+
+
+def analyze_plant_color(frame, bbox):
+    x1, y1, x2, y2 = map(int, bbox)
+
+    x1 = max(0, x1)
+    y1 = max(0, y1)
+    x2 = min(frame.shape[1]-1, x2)
+    y2 = min(frame.shape[0]-1, y2)
+
+    crop = frame[y1:y2, x1:x2]
+    if crop.size == 0:
+        return "unknown"
+
+    hsv = cv.cvtColor(crop, cv.COLOR_BGR2HSV)
+
+    mask_h = cv.inRange(hsv, LOWER_HEALTHY, UPPER_HEALTHY)
+    mask_s = cv.inRange(hsv, LOWER_SICK, UPPER_SICK)
+
+    total = float(mask_h.size)
+    healthy_ratio = float(cv.countNonZero(mask_h)) / total
+    sick_ratio = float(cv.countNonZero(mask_s)) / total
+
+    if healthy_ratio < 0.01 and sick_ratio < 0.01:
+        status = "no_leaf"
+    elif healthy_ratio >= sick_ratio:
+        status = "healthy"
+    else:
+        status = "sick"
+
+    return status
+
+
+# ========== MAIN ==========
+def main():
+    # Load engine
+    engine = load_engine(ENGINE_PATH)
+    context = engine.create_execution_context()
+
+    input_idx = output_idx = None
+    for i in range(engine.num_bindings):
+        name = engine.get_binding_name(i)
+        shape = engine.get_binding_shape(i)
+        is_input = engine.binding_is_input(i)
+        print("Binding", i, "|", name, "|", "Input" if is_input else "Output", "|", shape)
+        if is_input and input_idx is None:
+            input_idx = i
+        if (not is_input) and (output_idx is None):
+            output_idx = i
+
+    if input_idx is None or output_idx is None:
+        raise RuntimeError("Không tìm thấy binding input/output trong engine!")
+
+    input_shape = engine.get_binding_shape(input_idx)
+    output_shape = engine.get_binding_shape(output_idx)
+
+    h_input = np.empty(trt.volume(input_shape), dtype=np.float32)
+    h_output = np.empty(trt.volume(output_shape), dtype=np.float32)
+
+    d_input = cuda.mem_alloc(h_input.nbytes)
+    d_output = cuda.mem_alloc(h_output.nbytes)
+
+    bindings = [None] * engine.num_bindings
+    bindings[input_idx] = int(d_input)
+    bindings[output_idx] = int(d_output)
+
+    # Camera
+    pipeline = gstreamer_pipeline()
+    print("GStreamer pipeline:\n", pipeline)
+    cap = cv.VideoCapture(pipeline, cv.CAP_GSTREAMER)
+    if not cap.isOpened():
+        print("Không mở được camera!")
+        return
+
+    plant_tracks = []  # {"bbox": (x1,y1,x2,y2), "health": str, "last_seen": t}
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("Không đọc được frame, đợi...")
+            time.sleep(0.05)
+            continue
+
+        h, w = frame.shape[:2]
+
+        # 1) Hough luống
+        has_rows, steer_error, hough_dbg = detect_rows_hough(frame)
+
+        # 2) YOLO TensorRT
+        inp, ori_shape = preprocess_trt(frame, INPUT_W, INPUT_H)
+        cuda.memcpy_htod(d_input, inp.ravel())
+        context.execute_v2(bindings)
+        cuda.memcpy_dtoh(h_output, d_output)
+        out = h_output.reshape(output_shape)
+        dets = postprocess_trt(out, ori_shape)
+
+        # 3) Obstacle trong 30–60% ngang
+        obstacle_on_path, obs_dbg = detect_obstacle_on_path(dets, frame)
+
+        # 4) Detect cây + phân tích màu (tránh lặp lại)
+        now = time.time()
+        for (x1, y1, x2, y2, conf, label, cid) in dets:
+            if label != "plant":
+                continue
+
+            bbox = (x1, y1, x2, y2)
+
+            same_track = None
+            for tr in plant_tracks:
+                if bbox_iou(bbox, tr["bbox"]) > 0.5:
+                    same_track = tr
+                    break
+
+            if same_track is not None:
+                same_track["last_seen"] = now
+                health = same_track["health"]
+            else:
+                health = analyze_plant_color(frame, bbox)
+                plant_tracks.append({"bbox": bbox, "health": health, "last_seen": now})
+
+            # vẽ bbox + health
+            x1i = int(max(0, x1)); y1i = int(max(0, y1))
+            x2i = int(min(w-1, x2)); y2i = int(min(h-1, y2))
+
+            color = (0, 255, 0) if health == "healthy" else (0, 0, 255)
+            cv.rectangle(frame, (x1i, y1i), (x2i, y2i), color, 2)
+            cv.putText(frame, health, (x1i, max(0, y1i-5)),
+                       cv.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+        # xoá track cây quá cũ
+        plant_tracks = [tr for tr in plant_tracks if now - tr["last_seen"] < 3.0]
+
+        # 5) Ghi JSON cho ROS Python2
+        state = {
+            "stamp": now,
+            "has_rows": bool(has_rows),
+            "steer_error": float(steer_error),
+            "obstacle": bool(obstacle_on_path),
+            # ở đây bạn có thể ghi health của cây "trước mũi" nếu muốn
+            "plant_health": "unknown"
+        }
+        write_state(state)
+
+        # 6) Debug
+        if SHOW_DEBUG:
+            cv.imshow("FRAME_MAIN", frame)
+            cv.imshow("HOUGH_LINES_ROI", hough_dbg)
+            cv.imshow("OBSTACLE_ROI", obs_dbg)
+
+        key = cv.waitKey(1) & 0xFF
+        if key == 27 or key == ord("q"):
+            break
+
+    cap.release()
+    cv.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    main()

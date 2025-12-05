@@ -1,0 +1,46 @@
+<launch>
+
+    <!-- Node Python3: TensorRT + YOLO + Hough + HSV
+         Nhiệm vụ: đọc camera, xử lý, ghi /tmp/vision_state.json -->
+    <node pkg="field_robot_cam"
+          type="vision_ai.py"
+          name="vision_ai"
+          output="screen"
+          respawn="true">
+        <!-- Nếu sau này bạn muốn đổi path JSON thì sửa luôn ở cả 2 bên -->
+        <!-- Ở đây vision_trt.py đang hard-code STATE_FILE = "/tmp/vision_state.json" -->
+    </node>
+
+
+    <!-- Node Python2: ROS controller
+         Nhiệm vụ: đọc /tmp/vision_state.json và điều khiển robot -->
+    <node pkg="field_robot_cam"
+          type="vision_follower.py"
+          name="vision_follower"
+          output="screen"
+          respawn="true">
+
+        <!-- File JSON chứa dữ liệu từ vision_trt.py -->
+        <param name="vision_state_file" value="/tmp/bridge.json"/>
+
+        <!-- Timeout dữ liệu (giây). Nếu vision_trt không cập nhật kịp -> dừng robot -->
+        <param name="vision_state_timeout" value="0.5"/>
+
+        <!-- Tốc độ tiến -->
+        <param name="forward_speed" value="0.25"/>
+
+        <!-- Gain điều khiển góc -->
+        <param name="k_ang" value="2.0"/>
+
+        <!-- Giới hạn tốc độ quay -->
+        <param name="max_ang" value="1.0"/>
+
+        <!-- Chu kỳ điều khiển (giây) -->
+        <param name="control_period" value="0.1"/>
+
+        <!-- Topic cmd_vel để xuất ra -->
+        <param name="cmd_topic" value="/cmd_vel_row"/>
+
+    </node>
+
+</launch>
