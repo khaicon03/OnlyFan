@@ -336,7 +336,7 @@ def detect_obstacle_on_path(detections, frame, debug=False):
         if label != "obstacle":
             continue
 
-        cx = (x1 + x2) / 2.0
+        cx = (x1 + x2) / 2.0 
         cy = (y1 + y2) / 2.0
 
         if X_MIN <= cx <= X_MAX and Y_MIN <= cy <= Y_MAX:
