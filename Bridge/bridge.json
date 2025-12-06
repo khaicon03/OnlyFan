@@ -1,4 +1,7 @@
 {
-  "obstacle": false
+  "stamp": 1733384300.123,
+  "has_rows": true,
+  "steer_error": -0.18,
+  "obstacle": false,
+  "plant_health": "healthy"
 }
-
