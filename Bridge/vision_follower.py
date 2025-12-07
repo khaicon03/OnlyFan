@@ -144,6 +144,7 @@ class DualRowFollowerDebug:
 
     # =====================================================================
     # HÀM DETECT_ROWS ĐÃ SỬA LỖI GÓC & BỔ SUNG THÔNG TIN GÓC
+    # Logic góc đã được ĐẢO NGƯỢC theo yêu cầu của người dùng
     # =====================================================================
     def detect_rows(self, roi):
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
@@ -152,17 +153,15 @@ class DualRowFollowerDebug:
         lines = cv2.HoughLinesP(edges, 1, np.pi/180, self.hough_threshold, int(roi.shape[0]*0.5), 25)
         
         left_xs, right_xs = [], []
-        # BỔ SUNG: Danh sách lưu trữ góc dốc
         left_angles, right_angles = [], [] 
         
         h, w = roi.shape[:2]
         
-        # Vùng X cho phép (Không thay đổi)
         left_min, left_max = int(w*self.left_min_x_ratio), int(w*self.left_max_x_ratio)
         right_min, right_max = int(w*self.right_min_x_ratio), int(w*self.right_max_x_ratio)
         
-        # Góc mục tiêu (tính bằng độ)
         min_angle_target = self.min_angle_deg 
+        # Sử dụng self.max_angle_deg đã được thêm vào __init__
         max_angle_target = self.max_angle_deg 
         
         if lines is not None:
@@ -170,7 +169,6 @@ class DualRowFollowerDebug:
                 x1, y1, x2, y2 = l[0]
                 dx, dy = x2 - x1, y2 - y1
                 
-                # Tính góc có dấu (rad) so với trục X (ngang)
                 angle_rad = np.arctan2(dy, dx)
                 angle_deg = np.degrees(angle_rad) # Góc nằm trong khoảng (-180, 180)
 
@@ -187,24 +185,28 @@ class DualRowFollowerDebug:
                 x_check = x1 if y1 > y2 else x2 # Lấy x có y lớn hơn (gần cuối ROI)
                 
                 # --- PHÂN VÙNG BÊN TRÁI (LEFT LANE) ---
-                # Yêu cầu: Độ dốc DƯƠNG (Positive Slope): (0, 90) HOẶC (-180, -90)
+                # Yêu cầu: Độ dốc DƯƠNG (Positive Slope)
+                # ĐÃ ĐẢO NGƯỢC: Áp dụng điều kiện Góc Âm (Negative Slope) theo thực tế của người dùng
+                # Góc có dấu phải nằm trong khoảng (90, 180) HOẶC (-90, 0)
                 if left_min <= x_check <= left_max:
-                    if (0 < angle_deg < 90) or (angle_deg < -90): 
+                    if (90 < angle_deg < 180) or (-90 < angle_deg < 0): 
                         left_xs.append(x_check)
                         left_angles.append(slope_angle_deg)
                         
                 # --- PHÂN VÙNG BÊN PHẢI (RIGHT LANE) ---
-                # Yêu cầu: Độ dốc ÂM (Negative Slope): (90, 180) HOẶC (-90, 0)
+                # Yêu cầu: Độ dốc ÂM (Negative Slope)
+                # ĐÃ ĐẢO NGƯỢC: Áp dụng điều kiện Góc Dương (Positive Slope) theo thực tế của người dùng
+                # Góc có dấu phải nằm trong khoảng (0, 90) HOẶC (-180, -90)
                 if right_min <= x_check <= right_max:
-                    if (90 < angle_deg < 180) or (-90 < angle_deg < 0): 
+                    if (0 < angle_deg < 90) or (angle_deg < -90): 
                         right_xs.append(x_check)
                         right_angles.append(slope_angle_deg)
                         
-        # SỬA ĐỔI: Trả về danh sách X và danh sách Angle
+        # SỬA RETURN: Trả về danh sách X và danh sách Angle
         return left_xs, left_angles, right_xs, right_angles, edges
 
     # =====================================================================
-    # MAIN RUN ĐÃ CẬP NHẬT LOGIC ĐIỀU KHIỂN GÓC
+    # MAIN RUN ĐÃ CẬP NHẬT LOGIC ĐIỀU KHIỂN GÓC VÀ XỬ LÝ RETURN
     # =====================================================================
     def run(self):
         rate = rospy.Rate(30)
@@ -312,8 +314,8 @@ class DualRowFollowerDebug:
                 
                 # 2a. Điều khiển vị trí ngang (giữ luống ở target_pixel)
                 if detected_center != -1:
-                    pos_error = (target_pixel - detected_center) / float(w)
-                    ang += self.k_ang * pos_error
+                    error = (target_pixel - detected_center) / float(w)
+                    ang += self.k_ang * error
                 
                 # 2b. Điều khiển góc nghiêng (giữ góc luống ở balance_angle)
                 if avg_lane_angle != -1.0:
@@ -327,31 +329,31 @@ class DualRowFollowerDebug:
 
                 # --- VẼ VISUALIZATION ---
                 y_roi = int(h * 0.5)
-                # 1. V? các ???ng tìm ???c (giữ nguyên)
+                # 1. V? các ???ng tìm ???c
                 for val in left_xs: cv2.line(frame, (val, y_roi), (val, h), (255, 255, 0), 2)
                 for val in right_xs: cv2.line(frame, (val, y_roi), (val, h), (0, 255, 255), 2)
                 
-                # 2. V? ?i?m ?ích (Màu xanh d??ng) (giữ nguyên)
+                # 2. V? ?i?m ?ích (Màu xanh d??ng) 
                 cv2.line(frame, (int(target_pixel), y_roi), (int(target_pixel), h), (255, 0, 0), 3)
                 
-                # 3. V? tâm ???ng tìm ???c (Ch?m ??) (giữ nguyên)
+                # 3. V? tâm ???ng tìm ???c (Ch?m ??)
                 if detected_center != -1:
                     cv2.circle(frame, (int(detected_center), int(h*0.75)), 8, (0, 0, 255), -1)
                     cv2.line(frame, (int(detected_center), int(h*0.75)), (int(target_pixel), int(h*0.75)), (0, 255, 255), 2)
-
+                
                 # BỔ SUNG: V? góc trung bình (Debug mới)
                 if avg_lane_angle != -1.0:
                     cv2.putText(frame, f"Avg Angle: {avg_lane_angle:.1f} deg", (w - 220, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
 
 
             self.cmd_pub.publish(cmd)
-            
+
             # --- OSD (ON SCREEN DISPLAY) ---
             # Hi?n th? thông s? lên màn hình
             font = cv2.FONT_HERSHEY_SIMPLEX
             cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), font, 0.7, (0, 255, 0), 2)
             cv2.putText(frame, f"Mode: {state_text}", (10, 60), font, 0.7, (0, 255, 255), 2)
-            # CẬP NHẬT VỊ TRÍ Y CỦA TEXT DO BỔ SUNG THÔNG SỐ GÓC
+            # Sửa vị trí OSD để thêm thông số góc
             cv2.putText(frame, f"Lin.X: {cmd.linear.x:.2f}", (10, 120), font, 0.6, (255, 255, 255), 1)
             cv2.putText(frame, f"Ang.Z: {cmd.angular.z:.2f}", (10, 140), font, 0.6, (255, 255, 255), 1)
             
