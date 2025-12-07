@@ -141,7 +141,11 @@ class DualRowFollowerDebug:
         gray_blur = cv2.GaussianBlur(gray, (5, 5), 0)
         edges = cv2.Canny(gray_blur, self.canny1, self.canny2)
         lines = cv2.HoughLinesP(edges, 1, np.pi/180, self.hough_threshold, int(roi.shape[0]*0.5), 25)
+        
         left_xs, right_xs = [], []
+        # BỔ SUNG: Danh sách lưu trữ góc dốc
+        left_angles, right_angles = [], [] 
+        
         h, w = roi.shape[:2]
         
         # Vùng X cho phép (Không thay đổi)
@@ -161,12 +165,7 @@ class DualRowFollowerDebug:
                 angle_rad = np.arctan2(dy, dx)
                 angle_deg = np.degrees(angle_rad) # Góc nằm trong khoảng (-180, 180)
 
-                # Chuyển đổi để dễ kiểm tra: 
-                # Góc của luống cây thường là 90 độ +/- một lượng nhỏ so với trục dọc (hoặc 0 độ +/- so với trục ngang)
-                # Ta cần tìm các đường thẳng dốc, không phải đường ngang.
-                
                 # Chuyển góc về phạm vi [0, 90] cho độ dốc (Slope Angle)
-                # Đường thẳng đứng: 90, Đường nằm ngang: 0
                 slope_angle_deg = abs(angle_deg)
                 if slope_angle_deg > 90:
                     slope_angle_deg = 180 - slope_angle_deg
@@ -175,36 +174,29 @@ class DualRowFollowerDebug:
                 if not (min_angle_target <= slope_angle_deg <= max_angle_target):
                     continue
 
-                # =======================================================
-                # KIỂM TRA PHÂN VÙNG VÀ HƯỚNG DỐC (Độ dốc)
-                # =======================================================
-                
-                # Lấy tọa độ x để kiểm tra phân vùng (Lấy x ở cuối luống - gần phía camera hơn)
-                # Lưu ý: Trong ROI, y càng lớn (gần h) thì càng gần camera.
+                # Lấy tọa độ x để kiểm tra phân vùng (Gần phía camera hơn)
                 x_check = x1 if y1 > y2 else x2 # Lấy x có y lớn hơn (gần cuối ROI)
                 
                 # --- PHÂN VÙNG BÊN TRÁI (LEFT LANE) ---
-                # Yêu cầu: Độ dốc dương, Line đi lên từ trái sang phải
-                # (dy > 0 và dx > 0, hoặc dy < 0 và dx < 0) => angle_deg là [0, 90] hoặc [-180, -90]
-                # Hoặc đơn giản: slope_angle_deg phải là kết quả của góc dương.
+                # Yêu cầu: Độ dốc DƯƠNG (Positive Slope)
+                # Góc có dấu phải nằm trong khoảng (0, 90) HOẶC (-180, -90)
                 if left_min <= x_check <= left_max:
-                    # Kiểm tra hướng: Line phải có độ dốc Dương (Positive Slope)
-                    # Góc có dấu phải nằm trong khoảng (0, 90) hoặc (-180, -90)
-                    # Line xanh bên trái có dy/dx > 0. Tức là 0 < angle_deg < 90 hoặc -180 < angle_deg < -90
-                    if 0 < angle_deg < 90 or angle_deg < -90:
+                    # SỬA LỖI: Đảm bảo chỉ nhận độ dốc DƯƠNG
+                    if (0 < angle_deg < 90) or (angle_deg < -90): 
                         left_xs.append(x_check)
+                        left_angles.append(slope_angle_deg)
                         
                 # --- PHÂN VÙNG BÊN PHẢI (RIGHT LANE) ---
-                # Yêu cầu: Độ dốc âm, Line đi lên từ phải sang trái
-                # (dy > 0 và dx < 0, hoặc dy < 0 và dx > 0) => angle_deg là [90, 180] hoặc [-90, 0]
+                # Yêu cầu: Độ dốc ÂM (Negative Slope)
+                # Góc có dấu phải nằm trong khoảng (90, 180) HOẶC (-90, 0)
                 if right_min <= x_check <= right_max:
-                    # Kiểm tra hướng: Line phải có độ dốc Âm (Negative Slope)
-                    # Góc có dấu phải nằm trong khoảng (90, 180) hoặc (-90, 0)
-                    # Line xanh bên phải có dy/dx < 0. Tức là 90 < angle_deg < 180 hoặc -90 < angle_deg < 0
-                    if 90 < angle_deg < 180 or -90 < angle_deg < 0:
+                    # SỬA LỖI: Đảm bảo chỉ nhận độ dốc ÂM
+                    if (90 < angle_deg < 180) or (-90 < angle_deg < 0): 
                         right_xs.append(x_check)
+                        right_angles.append(slope_angle_deg)
                         
-        return left_xs, right_xs, edges
+        # SỬA ĐỔI: Trả về danh sách X và danh sách Angle
+        return left_xs, left_angles, right_xs, right_angles, edges
 
     # =====================================================================
     # MAIN RUN
