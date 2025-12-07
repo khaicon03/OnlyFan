@@ -1,0 +1,6 @@
+{
+    "description": "nhận tham số truyền từ node ai colab xuống để điều khiển",
+
+    "obstacle": false,
+    "plant": false
+}

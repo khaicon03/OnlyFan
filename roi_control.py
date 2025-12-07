@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-# test
+
 import rospy
 import cv2
 import numpy as np
@@ -27,18 +27,17 @@ class DualRowFollowerROI:
         self.forward_speed = rospy.get_param("~forward_speed", 0.25)
 
         # target theo 10cm
-        self.center_ratio = rospy.get_param("~center_ratio", 0.5)
+        self.left_target_ratio  = rospy.get_param("~left_target_ratio", 0.30)
+        self.right_target_ratio = rospy.get_param("~right_target_ratio", 0.70)
+        self.center_ratio       = rospy.get_param("~center_ratio", 0.50)
 
-        # ROI: dùng nửa dưới ảnh để bám luống
-        self.roi_y_ratio = rospy.get_param("~roi_y_ratio", 0.5)
+        # vùng trái/phải loại line giả
+        self.left_min_x_ratio  = rospy.get_param("~left_min_x_ratio", 0.05)
+        self.left_max_x_ratio  = rospy.get_param("~left_max_x_ratio", 0.45)
+        self.right_min_x_ratio = rospy.get_param("~right_min_x_ratio", 0.55)
+        self.right_max_x_ratio = rospy.get_param("~right_max_x_ratio", 0.95)
 
-        # ROI ngang cho luống trái/phải (theo tỉ lệ chiều rộng)
-        self.left_min_x_ratio  = rospy.get_param("~left_min_x_ratio",  0.10)
-        self.left_max_x_ratio  = rospy.get_param("~left_max_x_ratio",  0.40)
-        self.right_min_x_ratio = rospy.get_param("~right_min_x_ratio", 0.60)
-        self.right_max_x_ratio = rospy.get_param("~right_max_x_ratio", 0.90)
-
-        # hệ số PID đơn giản (chỉ P) cho góc lái
+        # gain điều khiển
         self.k_ang   = rospy.get_param("~k_ang", 2.0)
         self.max_ang = rospy.get_param("~max_ang", 1.0)
 
@@ -50,11 +49,8 @@ class DualRowFollowerROI:
         # NGƯỠNG GÓC: chỉ giữ các line có góc so với trục NẰM (x) >= min_angle_deg
         self.min_angle_deg = max(35.0, rospy.get_param("~min_angle_deg", 35.0))
 
-        # Khung dọc từ 30% đến 60% chiều ngang để check vật cản (full chiều cao)
-        self.obstacle_x_min_ratio = rospy.get_param("~obstacle_x_min_ratio", 0.30)
-        self.obstacle_x_max_ratio = rospy.get_param("~obstacle_x_max_ratio", 0.60)
 
-        # dùng check màu lá hay không
+        # ================== COLOR CHECK TRONG BBOX CÂY ==================
         self.use_color_check = rospy.get_param("~use_color_check", True)
 
         # lower / upper HSV (bạn override trong launch)
@@ -77,11 +73,11 @@ class DualRowFollowerROI:
         self.stop_on_plant = rospy.get_param("~stop_on_plant", True)
         self.inspect_pause_frames = rospy.get_param("~inspect_pause_frames", 10)
         self.inspect_counter = 0  # >0 nghĩa là vừa check xong cây, chưa dừng lại nữa
-        # ====== THAM SỐ ĐỌC CỜ TỪ FILE JSON ======
+
+        # load file param.json truyền tham số điều khiển 
         self.json_path = rospy.get_param("~json_path", "param.json")
         self.obstacle_flag = False
         self.plant_flag = False
-
         # subscriber camera
         rospy.Subscriber(self.image_topic, Image, self.image_callback)
 
@@ -91,22 +87,21 @@ class DualRowFollowerROI:
     def detect_rows(self, roi):
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         gray_blur = cv2.GaussianBlur(gray, (5, 5), 0)
-
         edges = cv2.Canny(gray_blur, self.canny1, self.canny2)
 
         lines = cv2.HoughLinesP(
             edges,
-            1,
-            np.pi / 180,
+            rho=1,
+            theta=np.pi/180,
             threshold=self.hough_threshold,
-            minLineLength=30,
-            maxLineGap=10
+            minLineLength=int(roi.shape[0] * 0.5),
+            maxLineGap=25
         )
 
-        h, w = roi.shape[:2]
-
-        left_xs  = []
+        left_xs = []
         right_xs = []
+
+        h, w = roi.shape[:2]
 
         left_min  = int(w * self.left_min_x_ratio)
         left_max  = int(w * self.left_max_x_ratio)
@@ -175,7 +170,9 @@ class DualRowFollowerROI:
         ratio = match_pixels / total_pixels
         is_match = (ratio >= self.color_min_ratio)
         return is_match, ratio
-
+    
+    # =====================================================================
+    # đọc cờ từ json
     def update_flags_from_json(self):
         """Đọc cờ obstacle / plant từ file JSON (do node AI bên ngoài ghi)."""
         try:
@@ -198,22 +195,17 @@ class DualRowFollowerROI:
         except:
             return
 
+        h, w, _ = frame.shape
+
         # cập nhật cờ obstacle / plant từ file JSON
         self.update_flags_from_json()
-
-        h, w, _ = frame.shape
 
         # giảm counter nếu đang ở pha "đi tiếp sau khi kiểm tra cây"
         if self.inspect_counter > 0:
             self.inspect_counter -= 1
 
-        # =====================================================
-        # 1) OBSTACLE TỪ CỜ JSON
-        # =====================================================
-        obstacle_on_path = self.obstacle_flag
-
-        # Nếu có vật cản trong khung (cờ obstacle_on_path) -> dừng và RETURN
-        if obstacle_on_path:
+        # Nếu có vật cản trong khung 30–60% -> dừng và (nếu debug) vẽ khung rồi RETURN
+        if self.obstacle_flag:
             cmd = Twist()
             cmd.linear.x = 0.0
             cmd.angular.z = 0.0
@@ -227,12 +219,7 @@ class DualRowFollowerROI:
         stop_for_plant = False
         plant_to_inspect = None
 
-        # Chỉ stop khi:
-        #  - Cho phép stop_on_plant
-        #  - Không trong thời gian "cooldown" sau lần kiểm tra trước
-        #  - Cờ plant trong file JSON đang bật
         if self.stop_on_plant and self.inspect_counter <= 0 and self.plant_flag:
-            # Không dùng YOLO nữa: dùng vùng nửa dưới khung hình để kiểm tra màu lá
             x1b = 0
             y1b = int(h * 0.5)
             x2b = w
@@ -240,30 +227,30 @@ class DualRowFollowerROI:
             plant_to_inspect = (x1b, y1b, x2b, y2b)
             stop_for_plant = True
 
-        if stop_for_plant and plant_to_inspect is not None:
-            # dừng robot
-            cmd = Twist()
-            cmd.linear.x = 0.0
-            cmd.angular.z = 0.0
-            self.cmd_pub.publish(cmd)
+            if stop_for_plant and plant_to_inspect is not None:
+                # dừng robot
+                cmd = Twist()
+                cmd.linear.x = 0.0
+                cmd.angular.z = 0.0
+                self.cmd_pub.publish(cmd)
 
-            x1b, y1b, x2b, y2b = plant_to_inspect
+                x1b, y1b, x2b, y2b = plant_to_inspect
 
-            # kiểm tra màu lá lần nữa (nếu muốn chắc chắn)
-            is_match, ratio = self.check_plant_color(frame, (x1b, y1b, x2b, y2b))
+                # kiểm tra màu lá lần nữa (nếu muốn chắc chắn)
+                is_match, ratio = self.check_plant_color(frame, (x1b, y1b, x2b, y2b))
 
-            if is_match:
-                rospy.loginfo("PLANT COLOR MATCH at bbox (%d,%d,%d,%d), ratio=%.2f",
-                              x1b, y1b, x2b, y2b, ratio)
-            else:
-                rospy.loginfo("PLANT COLOR NOT MATCH at bbox (%d,%d,%d,%d), ratio=%.2f",
-                              x1b, y1b, x2b, y2b, ratio)
+                if is_match:
+                    rospy.loginfo("PLANT COLOR MATCH at bbox (%d,%d,%d,%d), ratio=%.2f",
+                                x1b, y1b, x2b, y2b, ratio)
+                else:
+                    rospy.loginfo("PLANT COLOR NOT MATCH at bbox (%d,%d,%d,%d), ratio=%.2f",
+                                x1b, y1b, x2b, y2b, ratio)
 
-            # đặt thời gian "đi tiếp" không dừng lại liền
-            self.inspect_counter = self.inspect_pause_frames
+                # đặt thời gian "đi tiếp" không dừng lại liền
+                self.inspect_counter = self.inspect_pause_frames
 
-            # rất quan trọng: RETURN → frame này không bám luống
-            return
+                # rất quan trọng: RETURN → frame này không bám luống
+                return
 
         # =====================================================
         # 2) KHÔNG VẬT CẢN, KHÔNG ĐANG KIỂM TRA CÂY: BÁM LUỐNG
@@ -304,26 +291,12 @@ class DualRowFollowerROI:
 
                     cv2.line(roi_vis, (x1_l, y1_l), (x2_l, y2_l), (0, 0, 255), 2)
 
-            frame_vis = frame.copy()
-
-            gx = int(self.center_ratio * w)
-            cv2.line(frame_vis, (gx, 0), (gx, h - 1), (0, 0, 255), 1)
-
-            y1 = int(h * self.roi_y_ratio)
-            y2 = h
-
             for x in left_xs:
-                cv2.line(frame_vis, (x, y1), (x, y2), (255, 255, 0), 1)
+                cv2.line(roi_vis, (x, 0), (x, roi_h - 1), (255, 255, 0), 1)
             for x in right_xs:
-                cv2.line(frame_vis, (x, y1), (x, y2), (0, 255, 255), 1)
+                cv2.line(roi_vis, (x, 0), (x, roi_h - 1), (0, 255, 255), 1)
 
-            # vẽ khung 30–60% cho dễ hình dung
-            path_x_min = int(self.obstacle_x_min_ratio * w)
-            path_x_max = int(self.obstacle_x_max_ratio * w)
-            cv2.rectangle(frame_vis,
-                          (path_x_min, 0),
-                          (path_x_max, h - 1),
-                          (0, 255, 255), 1)
+            frame_vis = frame.copy()
 
             x1 = 0
             y1 = int(h * 0.5)
@@ -334,6 +307,11 @@ class DualRowFollowerROI:
 
             cx_full = int(self.center_ratio * w)
             cv2.line(frame_vis, (cx_full, y1), (cx_full, y2), (255, 0, 0), 1)
+
+            for x in left_xs:
+                cv2.line(frame_vis, (x, y1), (x, y2), (255, 255, 0), 1)
+            for x in right_xs:
+                cv2.line(frame_vis, (x, y1), (x, y2), (0, 255, 255), 1)
 
             cv2.imshow("Frame with ROI + rows + plants", frame_vis)
             cv2.imshow("ROI_with_lines", roi_vis)
@@ -346,19 +324,31 @@ class DualRowFollowerROI:
         cmd.linear.x = self.forward_speed
 
         if len(left_xs) > 0 and len(right_xs) > 0:
-            left_mean  = float(np.mean(left_xs))
-            right_mean = float(np.mean(right_xs))
-            row_center = 0.5 * (left_mean + right_mean)
+            x_left  = max(left_xs)
+            x_right = min(right_xs)
+            center = (x_left + x_right) / 2.0
+            desired = self.center_ratio * w
+            error = (desired - center) / float(w)
 
-            error = self.center_ratio * roi.shape[1] - row_center
+        elif len(left_xs) > 0:
+            x_left = max(left_xs)
+            desired = self.left_target_ratio * w
+            error = (desired - x_left) / float(w)
 
-            error = error / roi.shape[1]
+        elif len(right_xs) > 0:
+            x_right = min(right_xs)
+            desired = self.right_target_ratio * w
+            error = (desired - x_right) / float(w)
 
-            ang = self.k_ang * error
-            ang = max(-self.max_ang, min(self.max_ang, ang))
-            cmd.angular.z = ang
         else:
+            cmd.linear.x = 0.0
             cmd.angular.z = 0.0
+            self.cmd_pub.publish(cmd)
+            return
+
+        ang = self.k_ang * error
+        ang = max(-self.max_ang, min(self.max_ang, ang))
+        cmd.angular.z = ang
 
         self.cmd_pub.publish(cmd)
 
