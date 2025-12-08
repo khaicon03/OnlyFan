@@ -27,11 +27,11 @@ class DualRowFollowerDebug:
         # Params Bám Lu?ng
         self.left_target_ratio  = rospy.get_param("~left_target_ratio", 0.30)
         self.right_target_ratio = rospy.get_param("~right_target_ratio", 0.70)
-        self.center_ratio       = rospy.get_param("~center_ratio", 0.40)
+        self.center_ratio       = rospy.get_param("~center_ratio", 0.50)
         
         self.left_min_x_ratio  = rospy.get_param("~left_min_x_ratio", 0.05)
-        self.left_max_x_ratio  = rospy.get_param("~left_max_x_ratio", 0.4)
-        self.right_min_x_ratio = rospy.get_param("~right_min_x_ratio", 0.6)
+        self.left_max_x_ratio  = rospy.get_param("~left_max_x_ratio", 0.45)
+        self.right_min_x_ratio = rospy.get_param("~right_min_x_ratio", 0.55)
         self.right_max_x_ratio = rospy.get_param("~right_max_x_ratio", 0.95)
         
         self.k_ang = rospy.get_param("~k_ang", 2.0)
@@ -161,6 +161,7 @@ class DualRowFollowerDebug:
         right_min, right_max = int(w*self.right_min_x_ratio), int(w*self.right_max_x_ratio)
         
         min_angle_target = self.min_angle_deg 
+        # Sử dụng self.max_angle_deg đã được thêm vào __init__
         max_angle_target = self.max_angle_deg 
         
         if lines is not None:
@@ -184,6 +185,7 @@ class DualRowFollowerDebug:
                 x_check = x1 if y1 > y2 else x2 # Lấy x có y lớn hơn (gần cuối ROI)
                 
                 # --- PHÂN VÙNG BÊN TRÁI (LEFT LANE) ---
+                # Yêu cầu: Độ dốc DƯƠNG (Positive Slope)
                 # ĐÃ ĐẢO NGƯỢC: Áp dụng điều kiện Góc Âm (Negative Slope) theo thực tế của người dùng
                 # Góc có dấu phải nằm trong khoảng (90, 180) HOẶC (-90, 0)
                 if left_min <= x_check <= left_max:
@@ -192,6 +194,7 @@ class DualRowFollowerDebug:
                         left_angles.append(slope_angle_deg)
                         
                 # --- PHÂN VÙNG BÊN PHẢI (RIGHT LANE) ---
+                # Yêu cầu: Độ dốc ÂM (Negative Slope)
                 # ĐÃ ĐẢO NGƯỢC: Áp dụng điều kiện Góc Dương (Positive Slope) theo thực tế của người dùng
                 # Góc có dấu phải nằm trong khoảng (0, 90) HOẶC (-180, -90)
                 if right_min <= x_check <= right_max:
@@ -203,7 +206,7 @@ class DualRowFollowerDebug:
         return left_xs, left_angles, right_xs, right_angles, edges
 
     # =====================================================================
-    # MAIN RUN ĐÃ SỬA LỖI ĐẢO NGƯỢC DẤU ĐIỀU KHIỂN
+    # MAIN RUN ĐÃ CẬP NHẬT LOGIC ĐIỀU KHIỂN GÓC VÀ XỬ LÝ RETURN
     # =====================================================================
     def run(self):
         rate = rospy.Rate(30)
@@ -311,17 +314,16 @@ class DualRowFollowerDebug:
                 
                 # 2a. Điều khiển vị trí ngang (giữ luống ở target_pixel)
                 if detected_center != -1:
-                    # Lỗi vị trí (Dương nếu detected_center ở bên Phải so với target)
-                    pos_error = (detected_center - target_pixel) / float(w)
-                    # SỬA LỖI: Cần trừ đi để rẽ phải (ngược lại với lỗi dương)
-                    ang -= self.k_ang * pos_error 
+                    error = (target_pixel - detected_center) / float(w)
+                    ang += self.k_ang * error
                 
                 # 2b. Điều khiển góc nghiêng (giữ góc luống ở balance_angle)
                 if avg_lane_angle != -1.0:
-                    # Angle_Error: Dương nếu góc luống thực tế < góc mục tiêu (Quá phẳng -> cần rẽ phải)
-                    angle_error = self.balance_angle - avg_lane_angle
+                    # Angle_Error: Dương nếu góc luống thực tế > góc mục tiêu (Quá dốc -> cần rẽ trái)
+                    #             Âm nếu góc luống thực tế < góc mục tiêu (Quá phẳng -> cần rẽ phải)
+                    angle_error = avg_lane_angle - self.balance_angle 
                     ang += self.k_ang_correct * angle_error
-                    
+
                 # Giới hạn Angular Z cuối cùng
                 cmd.angular.z = max(-self.max_ang, min(self.max_ang, ang))
 
@@ -338,7 +340,7 @@ class DualRowFollowerDebug:
                 if detected_center != -1:
                     cv2.circle(frame, (int(detected_center), int(h*0.75)), 8, (0, 0, 255), -1)
                     cv2.line(frame, (int(detected_center), int(h*0.75)), (int(target_pixel), int(h*0.75)), (0, 255, 255), 2)
-
+                
                 # BỔ SUNG: V? góc trung bình (Debug mới)
                 if avg_lane_angle != -1.0:
                     cv2.putText(frame, f"Avg Angle: {avg_lane_angle:.1f} deg", (w - 220, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
@@ -351,6 +353,7 @@ class DualRowFollowerDebug:
             font = cv2.FONT_HERSHEY_SIMPLEX
             cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), font, 0.7, (0, 255, 0), 2)
             cv2.putText(frame, f"Mode: {state_text}", (10, 60), font, 0.7, (0, 255, 255), 2)
+            # Sửa vị trí OSD để thêm thông số góc
             cv2.putText(frame, f"Lin.X: {cmd.linear.x:.2f}", (10, 120), font, 0.6, (255, 255, 255), 1)
             cv2.putText(frame, f"Ang.Z: {cmd.angular.z:.2f}", (10, 140), font, 0.6, (255, 255, 255), 1)
             
