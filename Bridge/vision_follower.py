@@ -18,7 +18,7 @@ UPPER_SICK = np.array([35, 255, 255], dtype=np.uint8)
 class DualRowFollowerDebug:
     def __init__(self):
         rospy.init_node("row_follow_full_debug")
-        rospy.loginfo("--- FULL DEBUG MODE STARTED ---")
+        rospy.loginfo("--- FULL DEBUG MODE STARTED (ROI 3/4) ---")
 
         self.cmd_pub = rospy.Publisher("/cmd_vel_row", Twist, queue_size=1)
 
@@ -74,24 +74,14 @@ class DualRowFollowerDebug:
             self.yolo_ready = False
 
         # ========= CAMERA IMX219 =========
-        IN_W = 1280
-        IN_H = 720
-        CROP_W = 854
-        CROP_H = 480
-        roi_left = int((IN_W - CROP_W) / 2) # 213
-        roi_right = int(roi_left + CROP_W) # 1067
-        roi_top = int((IN_H - CROP_H) / 2) # 120
-        roi_bottom = int(roi_top + CROP_H) # 600
-
         self.gst_str = (
-            f"nvarguscamerasrc sensor-id=0 ! "
-            f"video/x-raw(memory:NVMM), width={IN_W}, height={IN_H}, format=NV12, framerate=30/1 ! "
-            f"nvvidconv left={roi_left} right={roi_right} top={roi_top} bottom={roi_bottom} flip-method=0 ! "
-            f"video/x-raw, width=640, height=480, format=BGRx ! "
-            f"videoconvert ! "
-            f"video/x-raw, format=BGR ! appsink"
+            "nvarguscamerasrc sensor-id=0 ! "
+            "video/x-raw(memory:NVMM), width=1280, height=720, format=NV12, framerate=30/1 ! "
+            "nvvidconv flip-method=0 ! "
+            "video/x-raw, width=640, height=480, format=BGRx ! "
+            "videoconvert ! "
+            "video/x-raw, format=BGR ! appsink"
         )
-
         self.cap = cv2.VideoCapture(self.gst_str, cv2.CAP_GSTREAMER)
 
     # =====================================================================
@@ -193,15 +183,10 @@ class DualRowFollowerDebug:
             obstacle_detected = False
             safe_zone_min, safe_zone_max = w / 3, 2 * w / 3
             
-            # --- MỚI: Danh sách chứa tâm các cây bên trái ---
-            left_plant_points = []
-            roi_left_limit = int(w / 2) # Giới hạn kiểm tra bên trái
-
             for obj in self.last_detections:
                 x, y, bw, bh = obj['box']
                 label = obj['label']
                 cx = x + bw / 2
-                cy = y + bh / 2 # Tâm Y của vật thể
                 
                 if label != "plant":
                     if safe_zone_min < cx < safe_zone_max and bh > h * 0.25:
@@ -210,12 +195,6 @@ class DualRowFollowerDebug:
                         cv2.putText(frame, "!!! STOP !!!", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
                 
                 if label == "plant":
-                    # --- Logic bám cây bên trái ---
-                    # Nếu tâm cây nằm ở nửa bên trái ảnh
-                    if cx < roi_left_limit:
-                        left_plant_points.append((int(cx), int(cy)))
-                    # ------------------------------
-
                     bbox = (x, y, x+bw, y+bh)
                     same_track = None
                     for tr in self.plant_tracks:
@@ -235,81 +214,45 @@ class DualRowFollowerDebug:
 
             # 3. ĐIỀU KHIỂN & DEBUG DRAWING
             cmd = Twist()
-            target_pixel = w * 0.5
+            target_pixel = w * 0.5 # Default target (Center)
             detected_center = -1
-            use_yolo_lane = False # Cờ đánh dấu đang dùng YOLO để chạy
             
             if obstacle_detected:
                 cmd.linear.x = 0.0
                 cmd.angular.z = 0.0
                 state_text = "OBSTACLE STOP"
+                # Để tránh lỗi biến chưa định nghĩa khi vẽ
+                roi = frame # Placeholder
+                left_xs, right_xs = [], []
+                edges = np.zeros((h, w), dtype=np.uint8)
+                y_roi = int(h * 0.25) # Vẫn khai báo y_roi
             else:
-                # =====================================================
-                # LOGIC MỚI: ƯU TIÊN YOLO NẾU > 4 CÂY BÊN TRÁI
-                # =====================================================
-                plant_line_x = -1
+                # ============ THAY ĐỔI ROI TẠI ĐÂY ============
+                # Cắt 3/4 màn hình (bỏ 25% phía trên)
+                y_roi = int(h * 0.25)
+                roi = frame[y_roi:h, :]
+                # ==============================================
                 
-                # Vẽ ROI kiểm tra (Khung màu tím mờ bên trái)
-                overlay = frame.copy()
-                cv2.rectangle(overlay, (0, 0), (roi_left_limit, h), (255, 0, 255), -1)
-                cv2.addWeighted(overlay, 0.1, frame, 0.9, 0, frame) # Hiệu ứng trong suốt
-                
-                if len(left_plant_points) > 4:
-                    use_yolo_lane = True
-                    # FitLine: Tìm đường thẳng đi qua các điểm (Hồi quy tuyến tính)
-                    # points phải là numpy array float32
-                    pts = np.array(left_plant_points, dtype=np.int32)
-                    # fitLine trả về [vx, vy, x0, y0] (vector chỉ phương và 1 điểm trên đường)
-                    [vx, vy, x0, y0] = cv2.fitLine(pts, cv2.DIST_L2, 0, 0.01, 0.01)
-                    
-                    # Tính toán 2 điểm để vẽ đường thẳng
-                    # y1 = 0 (đỉnh ảnh), y2 = h (đáy ảnh)
-                    # Phương trình tham số: P = P0 + t * v
-                    # => (y - y0) / vy = t => x = x0 + ((y - y0) / vy) * vx
-                    
-                    try:
-                        slope = vy / vx
-                        # Tính tọa độ x tại vị trí quan sát (ví dụ: 0.75 chiều cao ảnh)
-                        y_look = h * 0.75
-                        plant_line_x = int(x0 + ((y_look - y0) * (vx/vy)))
-                        
-                        # Vẽ đường YOLO (Màu Hồng Đậm)
-                        pt1 = (int(x0 + ((0 - y0) * (vx/vy))), 0)
-                        pt2 = (int(x0 + ((h - y0) * (vx/vy))), h)
-                        cv2.line(frame, pt1, pt2, (255, 0, 255), 4)
-                        
-                    except:
-                        pass # Phòng trường hợp đường nằm ngang vy=0
-
-                # =====================================================
-                # LOGIC CŨ (CANNY) HOẶC HYBRID
-                # =====================================================
-                roi = frame[int(h * 0.5):h, :]
                 left_xs, right_xs, edges = self.detect_rows(roi)
-                # cv2.imshow("Debug: Canny Edges", edges)
 
-                if use_yolo_lane and plant_line_x != -1:
-                    # Nếu YOLO tìm thấy hàng cây đẹp -> Bám theo nó
-                    detected_center = plant_line_x
-                    target_pixel = self.left_target_ratio * w # Mục tiêu là giữ hàng cây ở bên trái (tỷ lệ 0.3)
-                    cmd.linear.x = self.forward_speed
-                    state_text = "YOLO Left Follow"
-                    
-                elif len(left_xs) > 0 and len(right_xs) > 0:
+                # DEBUG: Hiển thị cửa sổ EDGES riêng để chỉnh Canny
+                cv2.imshow("Debug: Canny Edges", edges)
+
+                if len(left_xs) > 0 and len(right_xs) > 0:
                     detected_center = (max(left_xs) + min(right_xs)) / 2.0
                     target_pixel = self.center_ratio * w
                     cmd.linear.x = self.forward_speed
-                    state_text = "Dual Lane (Canny)"
+                    state_text = "Dual Lane"
                 elif len(left_xs) > 0:
                     detected_center = max(left_xs)
                     target_pixel = self.left_target_ratio * w
                     cmd.linear.x = self.forward_speed
-                    state_text = "Left Lane (Canny)"
+                    state_text = "Left Lane Only"
                 elif len(right_xs) > 0:
                     detected_center = min(right_xs)
                     target_pixel = self.right_target_ratio * w
                     cmd.linear.x = self.forward_speed
-                    state_text = "Right Lane (Canny)"
+                    state_text = "Right Lane Only"
                 else:
                     cmd.linear.x = 0.0
                     state_text = "No Lane Found"
@@ -322,34 +265,40 @@ class DualRowFollowerDebug:
                 else:
                     cmd.angular.z = 0.0
 
-                # --- VẼ VISUALIZATION ---
-                y_roi = int(h * 0.5)
-                # Vẽ line Canny cũ (nhỏ hơn để phân biệt)
-                for val in left_xs: cv2.line(frame, (val, y_roi), (val, h), (255, 255, 0), 1)
-                for val in right_xs: cv2.line(frame, (val, y_roi), (val, h), (0, 255, 255), 1)
-                
-                # Vẽ điểm đích
-                cv2.line(frame, (int(target_pixel), y_roi), (int(target_pixel), h), (255, 0, 0), 2)
-                
-                # Vẽ điểm đang bám theo (detected_center)
-                if detected_center != -1:
-                    color_dot = (255, 0, 255) if use_yolo_lane else (0, 0, 255) # Tím nếu là YOLO, Đỏ nếu là Canny
-                    cv2.circle(frame, (int(detected_center), int(h*0.75)), 10, color_dot, -1)
-                    cv2.line(frame, (int(detected_center), int(h*0.75)), (int(target_pixel), int(h*0.75)), (0, 255, 255), 2)
+            # --- VẼ VISUALIZATION (Cập nhật theo y_roi) ---
+            # 1. Vẽ các đường tìm được
+            for val in left_xs: cv2.line(frame, (val, y_roi), (val, h), (255, 255, 0), 2)
+            for val in right_xs: cv2.line(frame, (val, y_roi), (val, h), (0, 255, 255), 2)
+            
+            # 2. Vẽ điểm đích (Màu xanh dương)
+            cv2.line(frame, (int(target_pixel), y_roi), (int(target_pixel), h), (255, 0, 0), 3)
+            
+            # 3. Vẽ tâm đường tìm được (Chấm đỏ)
+            if detected_center != -1:
+                draw_y = int(h * 0.85) # Vẽ thấp xuống 1 chút
+                cv2.circle(frame, (int(detected_center), draw_y), 8, (0, 0, 255), -1)
+                # Vẽ đường nối error (Vàng)
+                cv2.line(frame, (int(detected_center), draw_y), (int(target_pixel), draw_y), (0, 255, 255), 2)
 
             self.cmd_pub.publish(cmd)
 
             # --- OSD (ON SCREEN DISPLAY) ---
+            # Hiển thị thông số lên màn hình
             font = cv2.FONT_HERSHEY_SIMPLEX
             cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), font, 0.7, (0, 255, 0), 2)
             cv2.putText(frame, f"Mode: {state_text}", (10, 60), font, 0.7, (0, 255, 255), 2)
-            cv2.putText(frame, f"L-Plants: {len(left_plant_points)}", (10, 90), font, 0.7, (255, 0, 255), 2)
+            cv2.putText(frame, f"ROI: >{y_roi}px", (10, 90), font, 0.6, (200, 200, 200), 1)
+            cv2.putText(frame, f"Lin.X: {cmd.linear.x:.2f}", (10, 120), font, 0.6, (255, 255, 255), 1)
+            cv2.putText(frame, f"Ang.Z: {cmd.angular.z:.2f}", (10, 140), font, 0.6, (255, 255, 255), 1)
+            
+            # Vẽ khung ROI (Vùng quét)
+            cv2.rectangle(frame, (0, y_roi), (w, h), (100, 100, 100), 1)
 
             cv2.imshow("Main Vision: YOLO + Lane + Logic", frame)
             
             if cv2.waitKey(1) & 0xFF == ord('q'): break
             rate.sleep()
-       
+        
         self.cap.release()
         cv2.destroyAllWindows()
 
