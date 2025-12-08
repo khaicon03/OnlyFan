@@ -6,9 +6,10 @@ import cv2
 import numpy as np
 import os
 import time
+import json
 from geometry_msgs.msg import Twist
 
-# ========== C?U HÌNH MÀU S?C (HSV) ==========
+# ========== CẤU HÌNH MÀU SẮC (HSV) ==========
 LOWER_HEALTHY = np.array([35, 80, 80], dtype=np.uint8)
 UPPER_HEALTHY = np.array([85, 255, 255], dtype=np.uint8)
 LOWER_SICK = np.array([15, 40, 40], dtype=np.uint8)
@@ -19,12 +20,12 @@ class DualRowFollowerDebug:
         rospy.init_node("row_follow_full_debug")
         rospy.loginfo("--- FULL DEBUG MODE STARTED ---")
 
-        self.cmd_pub = rospy.Publisher("/cmd_vel_row", Twist, queue_size=1) 
+        self.cmd_pub = rospy.Publisher("/cmd_vel_row", Twist, queue_size=1)
 
         # ========= PARAMS =========
         self.forward_speed = rospy.get_param("~forward_speed", 0.25)
         
-        # Params Bám Lu?ng
+        # Params Bám Luống
         self.left_target_ratio  = rospy.get_param("~left_target_ratio", 0.30)
         self.right_target_ratio = rospy.get_param("~right_target_ratio", 0.70)
         self.center_ratio       = rospy.get_param("~center_ratio", 0.50)
@@ -37,27 +38,21 @@ class DualRowFollowerDebug:
         self.k_ang = rospy.get_param("~k_ang", 2.0)
         self.max_ang = rospy.get_param("~max_ang", 1.0)
         self.min_angle_deg = max(35.0, rospy.get_param("~min_angle_deg", 35.0))
-        
-        # BỔ SUNG: Tham số điều khiển góc nghiêng
-        self.max_angle_deg = rospy.get_param("~max_angle_deg", 70.0) 
-        self.balance_angle = (self.min_angle_deg + self.max_angle_deg) / 2.0 # Góc mục tiêu (e.g., 52.5 deg)
-        self.k_ang_correct = rospy.get_param("~k_ang_correct", 0.03) # Hệ số khuếch đại cho lỗi góc
-        
         self.canny1 = rospy.get_param("~canny1", 50)
         self.canny2 = rospy.get_param("~canny2", 150)
         self.hough_threshold = rospy.get_param("~hough_threshold", 60)
 
-        # ========= YOLO CONFIG (Giữ nguyên) =========
+        # ========= YOLO CONFIG =========
         script_dir = os.path.dirname(os.path.realpath(__file__))
         weights_path = os.path.join(script_dir, "custom_yolov4_tiny_best.weights")
         cfg_path = os.path.join(script_dir, "custom_yolov4_tiny.cfg")
-        names_path = os.path.join(script_dir, "coco.names") 
+        names_path = os.path.join(script_dir, "coco.names")
 
         self.frame_count = 0
-        self.skip_yolo_frames = 2 
-        self.last_detections = []   
+        self.skip_yolo_frames = 2
+        self.last_detections = []
         self.yolo_input_size = (320, 320)
-        self.plant_tracks = [] 
+        self.plant_tracks = []
         self.prev_time = 0
 
         rospy.loginfo(f"Load YOLO: {weights_path}")
@@ -78,19 +73,29 @@ class DualRowFollowerDebug:
             rospy.logerr(f"YOLO Error: {e}")
             self.yolo_ready = False
 
-        # ========= CAMERA IMX219 (Giữ nguyên) =========
+        # ========= CAMERA IMX219 =========
+        IN_W = 1280
+        IN_H = 720
+        CROP_W = 854
+        CROP_H = 480
+        roi_left = int((IN_W - CROP_W) / 2) # 213
+        roi_right = int(roi_left + CROP_W) # 1067
+        roi_top = int((IN_H - CROP_H) / 2) # 120
+        roi_bottom = int(roi_top + CROP_H) # 600
+
         self.gst_str = (
-            "nvarguscamerasrc sensor-id=0 ! "
-            "video/x-raw(memory:NVMM), width=1280, height=720, format=NV12, framerate=30/1 ! "
-            "nvvidconv flip-method=0 ! "
-            "video/x-raw, width=640, height=480, format=BGRx ! "
-            "videoconvert ! "
-            "video/x-raw, format=BGR ! appsink"
+            f"nvarguscamerasrc sensor-id=0 ! "
+            f"video/x-raw(memory:NVMM), width={IN_W}, height={IN_H}, format=NV12, framerate=30/1 ! "
+            f"nvvidconv left={roi_left} right={roi_right} top={roi_top} bottom={roi_bottom} flip-method=0 ! "
+            f"video/x-raw, width=640, height=480, format=BGRx ! "
+            f"videoconvert ! "
+            f"video/x-raw, format=BGR ! appsink"
         )
+
         self.cap = cv2.VideoCapture(self.gst_str, cv2.CAP_GSTREAMER)
 
     # =====================================================================
-    # SUPPORT (Giữ nguyên)
+    # SUPPORT
     # =====================================================================
     def bbox_iou(self, b1, b2):
         x1, y1, x2, y2 = b1
@@ -142,77 +147,35 @@ class DualRowFollowerDebug:
                 results.append({"box": boxes[i], "label": label, "conf": confidences[i], "class_id": class_ids[i]})
         return results
 
-    # =====================================================================
-    # HÀM DETECT_ROWS ĐÃ SỬA LỖI GÓC & BỔ SUNG THÔNG TIN GÓC
-    # Logic góc đã được ĐẢO NGƯỢC theo yêu cầu của người dùng
-    # =====================================================================
     def detect_rows(self, roi):
         gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
         gray_blur = cv2.GaussianBlur(gray, (5, 5), 0)
         edges = cv2.Canny(gray_blur, self.canny1, self.canny2)
         lines = cv2.HoughLinesP(edges, 1, np.pi/180, self.hough_threshold, int(roi.shape[0]*0.5), 25)
-        
         left_xs, right_xs = [], []
-        left_angles, right_angles = [], [] 
-        
         h, w = roi.shape[:2]
-        
         left_min, left_max = int(w*self.left_min_x_ratio), int(w*self.left_max_x_ratio)
         right_min, right_max = int(w*self.right_min_x_ratio), int(w*self.right_max_x_ratio)
-        
-        min_angle_target = self.min_angle_deg 
-        # Sử dụng self.max_angle_deg đã được thêm vào __init__
-        max_angle_target = self.max_angle_deg 
-        
         if lines is not None:
             for l in lines:
                 x1, y1, x2, y2 = l[0]
                 dx, dy = x2 - x1, y2 - y1
-                
-                angle_rad = np.arctan2(dy, dx)
-                angle_deg = np.degrees(angle_rad) # Góc nằm trong khoảng (-180, 180)
-
-                # Chuyển góc về phạm vi [0, 90] cho độ dốc (Slope Angle)
-                slope_angle_deg = abs(angle_deg)
-                if slope_angle_deg > 90:
-                    slope_angle_deg = 180 - slope_angle_deg
-
-                # KIỂM TRA GÓC (35 độ đến 70 độ so với trục ngang)
-                if not (min_angle_target <= slope_angle_deg <= max_angle_target):
-                    continue
-
-                # Lấy tọa độ x để kiểm tra phân vùng (Gần phía camera hơn)
-                x_check = x1 if y1 > y2 else x2 # Lấy x có y lớn hơn (gần cuối ROI)
-                
-                # --- PHÂN VÙNG BÊN TRÁI (LEFT LANE) ---
-                # Yêu cầu: Độ dốc DƯƠNG (Positive Slope)
-                # ĐÃ ĐẢO NGƯỢC: Áp dụng điều kiện Góc Âm (Negative Slope) theo thực tế của người dùng
-                # Góc có dấu phải nằm trong khoảng (90, 180) HOẶC (-90, 0)
-                if left_min <= x_check <= left_max:
-                    if (90 < angle_deg < 180) or (-90 < angle_deg < 0): 
-                        left_xs.append(x_check)
-                        left_angles.append(slope_angle_deg)
-                        
-                # --- PHÂN VÙNG BÊN PHẢI (RIGHT LANE) ---
-                # Yêu cầu: Độ dốc ÂM (Negative Slope)
-                # ĐÃ ĐẢO NGƯỢC: Áp dụng điều kiện Góc Dương (Positive Slope) theo thực tế của người dùng
-                # Góc có dấu phải nằm trong khoảng (0, 90) HOẶC (-180, -90)
-                if right_min <= x_check <= right_max:
-                    if (0 < angle_deg < 90) or (angle_deg < -90): 
-                        right_xs.append(x_check)
-                        right_angles.append(slope_angle_deg)
-                        
-        # SỬA RETURN: Trả về danh sách X và danh sách Angle
-        return left_xs, left_angles, right_xs, right_angles, edges
+                angle = abs(np.degrees(np.arctan2(dy, dx)))
+                if angle > 90: angle = 180 - angle
+                if angle < self.min_angle_deg: continue
+                x = x1 if y1 > y2 else x2
+                if left_min <= x <= left_max: left_xs.append(x)
+                elif right_min <= x <= right_max: right_xs.append(x)
+        return left_xs, right_xs, edges
 
     # =====================================================================
-    # MAIN RUN ĐÃ CẬP NHẬT LOGIC ĐIỀU KHIỂN GÓC VÀ XỬ LÝ RETURN
+    # MAIN RUN
     # =====================================================================
     def run(self):
         rate = rospy.Rate(30)
         while not rospy.is_shutdown():
             ret, frame = self.cap.read()
-            if not ret: 
+            if not ret:
                 rate.sleep()
                 continue
 
@@ -222,26 +185,37 @@ class DualRowFollowerDebug:
             h, w = frame.shape[:2]
             self.frame_count += 1
             
-            # 1. YOLO (Giữ nguyên)
+            # 1. YOLO
             if self.frame_count % (self.skip_yolo_frames + 1) == 0:
                 self.last_detections = self.detect_objects(frame)
             
-            # 2. LOGIC (Giữ nguyên)
+            # 2. LOGIC
             obstacle_detected = False
             safe_zone_min, safe_zone_max = w / 3, 2 * w / 3
             
+            # --- MỚI: Danh sách chứa tâm các cây bên trái ---
+            left_plant_points = []
+            roi_left_limit = int(w / 2) # Giới hạn kiểm tra bên trái
+
             for obj in self.last_detections:
                 x, y, bw, bh = obj['box']
                 label = obj['label']
                 cx = x + bw / 2
+                cy = y + bh / 2 # Tâm Y của vật thể
                 
-                if label != "plant": 
+                if label != "plant":
                     if safe_zone_min < cx < safe_zone_max and bh > h * 0.25:
                         obstacle_detected = True
                         cv2.rectangle(frame, (x, y), (x+bw, y+bh), (0, 0, 255), 3)
                         cv2.putText(frame, "!!! STOP !!!", (x, y-10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
                 
                 if label == "plant":
+                    # --- Logic bám cây bên trái ---
+                    # Nếu tâm cây nằm ở nửa bên trái ảnh
+                    if cx < roi_left_limit:
+                        left_plant_points.append((int(cx), int(cy)))
+                    # ------------------------------
+
                     bbox = (x, y, x+bw, y+bh)
                     same_track = None
                     for tr in self.plant_tracks:
@@ -261,110 +235,121 @@ class DualRowFollowerDebug:
 
             # 3. ĐIỀU KHIỂN & DEBUG DRAWING
             cmd = Twist()
-            target_pixel = w * 0.5 # Default target (Center)
+            target_pixel = w * 0.5
             detected_center = -1
-            avg_lane_angle = -1.0 # Giá trị mặc định
-
+            use_yolo_lane = False # Cờ đánh dấu đang dùng YOLO để chạy
+            
             if obstacle_detected:
                 cmd.linear.x = 0.0
                 cmd.angular.z = 0.0
                 state_text = "OBSTACLE STOP"
             else:
-                roi = frame[int(h * 0.5):h, :]
-                # CẬP NHẬT: Nhận 5 giá trị trả về
-                left_xs, left_angles, right_xs, right_angles, edges = self.detect_rows(roi) 
-
-                cv2.imshow("Debug: Canny Edges", edges)
+                # =====================================================
+                # LOGIC MỚI: ƯU TIÊN YOLO NẾU > 4 CÂY BÊN TRÁI
+                # =====================================================
+                plant_line_x = -1
                 
-                # --- PHẦN 1: TÍNH TOÁN VỊ TRÍ & GÓC TRUNG BÌNH ---
-                if len(left_xs) > 0 and len(right_xs) > 0:
+                # Vẽ ROI kiểm tra (Khung màu tím mờ bên trái)
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (0, 0), (roi_left_limit, h), (255, 0, 255), -1)
+                cv2.addWeighted(overlay, 0.1, frame, 0.9, 0, frame) # Hiệu ứng trong suốt
+                
+                if len(left_plant_points) > 4:
+                    use_yolo_lane = True
+                    # FitLine: Tìm đường thẳng đi qua các điểm (Hồi quy tuyến tính)
+                    # points phải là numpy array float32
+                    pts = np.array(left_plant_points, dtype=np.int32)
+                    # fitLine trả về [vx, vy, x0, y0] (vector chỉ phương và 1 điểm trên đường)
+                    [vx, vy, x0, y0] = cv2.fitLine(pts, cv2.DIST_L2, 0, 0.01, 0.01)
+                    
+                    # Tính toán 2 điểm để vẽ đường thẳng
+                    # y1 = 0 (đỉnh ảnh), y2 = h (đáy ảnh)
+                    # Phương trình tham số: P = P0 + t * v
+                    # => (y - y0) / vy = t => x = x0 + ((y - y0) / vy) * vx
+                    
+                    try:
+                        slope = vy / vx
+                        # Tính tọa độ x tại vị trí quan sát (ví dụ: 0.75 chiều cao ảnh)
+                        y_look = h * 0.75
+                        plant_line_x = int(x0 + ((y_look - y0) * (vx/vy)))
+                        
+                        # Vẽ đường YOLO (Màu Hồng Đậm)
+                        pt1 = (int(x0 + ((0 - y0) * (vx/vy))), 0)
+                        pt2 = (int(x0 + ((h - y0) * (vx/vy))), h)
+                        cv2.line(frame, pt1, pt2, (255, 0, 255), 4)
+                        
+                    except:
+                        pass # Phòng trường hợp đường nằm ngang vy=0
+
+                # =====================================================
+                # LOGIC CŨ (CANNY) HOẶC HYBRID
+                # =====================================================
+                roi = frame[int(h * 0.5):h, :]
+                left_xs, right_xs, edges = self.detect_rows(roi)
+                # cv2.imshow("Debug: Canny Edges", edges)
+
+                if use_yolo_lane and plant_line_x != -1:
+                    # Nếu YOLO tìm thấy hàng cây đẹp -> Bám theo nó
+                    detected_center = plant_line_x
+                    target_pixel = self.left_target_ratio * w # Mục tiêu là giữ hàng cây ở bên trái (tỷ lệ 0.3)
+                    cmd.linear.x = self.forward_speed
+                    state_text = "YOLO Left Follow"
+                    
+                elif len(left_xs) > 0 and len(right_xs) > 0:
                     detected_center = (max(left_xs) + min(right_xs)) / 2.0
                     target_pixel = self.center_ratio * w
                     cmd.linear.x = self.forward_speed
-                    state_text = "Dual Lane"
-                    # Tính góc trung bình từ cả hai luống
-                    all_angles = left_angles + right_angles
-                    if len(all_angles) > 0:
-                        avg_lane_angle = np.mean(all_angles)
-                        
+                    state_text = "Dual Lane (Canny)"
                 elif len(left_xs) > 0:
                     detected_center = max(left_xs)
                     target_pixel = self.left_target_ratio * w
                     cmd.linear.x = self.forward_speed
-                    state_text = "Left Lane Only"
-                    if len(left_angles) > 0:
-                        avg_lane_angle = np.mean(left_angles)
-                        
+                    state_text = "Left Lane (Canny)"
                 elif len(right_xs) > 0:
                     detected_center = min(right_xs)
                     target_pixel = self.right_target_ratio * w
                     cmd.linear.x = self.forward_speed
-                    state_text = "Right Lane Only"
-                    if len(right_angles) > 0:
-                        avg_lane_angle = np.mean(right_angles)
-                        
+                    state_text = "Right Lane (Canny)"
                 else:
                     cmd.linear.x = 0.0
                     state_text = "No Lane Found"
                     detected_center = -1
-                    avg_lane_angle = -1.0 
 
-                # --- PHẦN 2: ĐIỀU KHIỂN GÓC (Yaw) ---
-                ang = 0.0
-                
-                # 2a. Điều khiển vị trí ngang (giữ luống ở target_pixel)
                 if detected_center != -1:
                     error = (target_pixel - detected_center) / float(w)
-                    ang += self.k_ang * error
-                
-                # 2b. Điều khiển góc nghiêng (giữ góc luống ở balance_angle)
-                if avg_lane_angle != -1.0:
-                    # Angle_Error: Dương nếu góc luống thực tế > góc mục tiêu (Quá dốc -> cần rẽ trái)
-                    #             Âm nếu góc luống thực tế < góc mục tiêu (Quá phẳng -> cần rẽ phải)
-                    angle_error = avg_lane_angle - self.balance_angle 
-                    ang += self.k_ang_correct * angle_error
-
-                # Giới hạn Angular Z cuối cùng
-                cmd.angular.z = max(-self.max_ang, min(self.max_ang, ang))
+                    ang = self.k_ang * error
+                    cmd.angular.z = max(-self.max_ang, min(self.max_ang, ang))
+                else:
+                    cmd.angular.z = 0.0
 
                 # --- VẼ VISUALIZATION ---
                 y_roi = int(h * 0.5)
-                # 1. V? các ???ng tìm ???c
-                for val in left_xs: cv2.line(frame, (val, y_roi), (val, h), (255, 255, 0), 2)
-                for val in right_xs: cv2.line(frame, (val, y_roi), (val, h), (0, 255, 255), 2)
+                # Vẽ line Canny cũ (nhỏ hơn để phân biệt)
+                for val in left_xs: cv2.line(frame, (val, y_roi), (val, h), (255, 255, 0), 1)
+                for val in right_xs: cv2.line(frame, (val, y_roi), (val, h), (0, 255, 255), 1)
                 
-                # 2. V? ?i?m ?ích (Màu xanh d??ng) 
-                cv2.line(frame, (int(target_pixel), y_roi), (int(target_pixel), h), (255, 0, 0), 3)
+                # Vẽ điểm đích
+                cv2.line(frame, (int(target_pixel), y_roi), (int(target_pixel), h), (255, 0, 0), 2)
                 
-                # 3. V? tâm ???ng tìm ???c (Ch?m ??)
+                # Vẽ điểm đang bám theo (detected_center)
                 if detected_center != -1:
-                    cv2.circle(frame, (int(detected_center), int(h*0.75)), 8, (0, 0, 255), -1)
+                    color_dot = (255, 0, 255) if use_yolo_lane else (0, 0, 255) # Tím nếu là YOLO, Đỏ nếu là Canny
+                    cv2.circle(frame, (int(detected_center), int(h*0.75)), 10, color_dot, -1)
                     cv2.line(frame, (int(detected_center), int(h*0.75)), (int(target_pixel), int(h*0.75)), (0, 255, 255), 2)
-                
-                # BỔ SUNG: V? góc trung bình (Debug mới)
-                if avg_lane_angle != -1.0:
-                    cv2.putText(frame, f"Avg Angle: {avg_lane_angle:.1f} deg", (w - 220, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-
 
             self.cmd_pub.publish(cmd)
 
             # --- OSD (ON SCREEN DISPLAY) ---
-            # Hi?n th? thông s? lên màn hình
             font = cv2.FONT_HERSHEY_SIMPLEX
             cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), font, 0.7, (0, 255, 0), 2)
             cv2.putText(frame, f"Mode: {state_text}", (10, 60), font, 0.7, (0, 255, 255), 2)
-            # Sửa vị trí OSD để thêm thông số góc
-            cv2.putText(frame, f"Lin.X: {cmd.linear.x:.2f}", (10, 120), font, 0.6, (255, 255, 255), 1)
-            cv2.putText(frame, f"Ang.Z: {cmd.angular.z:.2f}", (10, 140), font, 0.6, (255, 255, 255), 1)
-            
-            # V? khung ROI (Vùng quét)
-            cv2.rectangle(frame, (0, int(h*0.5)), (w, h), (100, 100, 100), 1)
+            cv2.putText(frame, f"L-Plants: {len(left_plant_points)}", (10, 90), font, 0.7, (255, 0, 255), 2)
 
             cv2.imshow("Main Vision: YOLO + Lane + Logic", frame)
             
             if cv2.waitKey(1) & 0xFF == ord('q'): break
             rate.sleep()
-        
+       
         self.cap.release()
         cv2.destroyAllWindows()
 
